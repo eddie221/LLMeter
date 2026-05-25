@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LLMeter",
+  "version": "0.1.0",
+  "identifier": "com.local.llmeter",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "LLMeter",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1080,
+        "minHeight": 720,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [],
+    "resources": [
+      "resources/llama/*.tar.gz"
+    ]
+  }
+}

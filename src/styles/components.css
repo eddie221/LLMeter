@@ -1,0 +1,149 @@
+.mantine-Table-table {
+  color: var(--text);
+}
+
+.mantine-Table-th {
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+.mantine-Table-td,
+.mantine-Table-th {
+  border-bottom-color: var(--line-soft);
+}
+
+.mantine-Table-tr {
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.mantine-Table-tbody .mantine-Table-tr:hover .mantine-Table-td {
+  background: rgba(59, 130, 246, 0.08);
+  border-bottom-color: rgba(59, 130, 246, 0.22);
+}
+
+.mantine-Table-tbody .mantine-Table-tr:hover .mantine-Table-td:first-child {
+  box-shadow: inset 3px 0 0 rgba(59, 130, 246, 0.75);
+}
+
+.centeredLogTable th,
+.centeredLogTable td {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.tableControls {
+  align-items: flex-end;
+}
+
+.tablePager {
+  height: 30px;
+  align-items: center;
+  padding-bottom: 1px;
+}
+
+.tablePager .mantine-Text-root {
+  min-width: 92px;
+  text-align: center;
+}
+
+.tablePager .mantine-Button-root:disabled,
+.tablePager .mantine-Button-root[data-disabled] {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.filterRail {
+  padding: 0;
+  align-items: center;
+}
+
+.filterRail .filterChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  min-width: 112px;
+  padding: 0 20px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  line-height: 1;
+  text-align: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.01);
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.filterRail .filterChip:hover {
+  background: rgba(125, 140, 163, 0.08);
+  border-color: #384056;
+  color: var(--text);
+}
+
+.filterRail .filterChip.active {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.25);
+}
+
+.filterRail .filterChip.active:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 6px rgba(15, 23, 42, 0.24), 0 3px 10px rgba(59, 130, 246, 0.14);
+}
+
+.railDivider {
+  height: 38px;
+  border-left: 1px solid var(--line);
+}
+
+.noticeCard {
+  border-radius: 18px;
+}
+
+.noticeCard.error {
+  border-color: #76323c;
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecdd3;
+}
+
+.noticeCard.success {
+  border-color: #2f7d4b;
+  background: rgba(22, 101, 52, 0.28);
+  color: #bbf7d0;
+}
+
+.noticeCard.info {
+  border-color: #2f5f9f;
+  background: rgba(30, 64, 175, 0.22);
+  color: #bfdbfe;
+}
+
+.secretCard {
+  border-color: #245f35;
+  background: rgba(27, 68, 38, 0.28);
+}
+
+.barRow {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.barTrack {
+  flex: 1;
+  height: 14px;
+  background: var(--panel-2);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.barFill {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.5), rgba(34, 197, 94, 0.9));
+  border: 1px solid rgba(34, 197, 94, 0.7);
+}

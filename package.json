@@ -1,0 +1,37 @@
+{
+  "name": "llmeter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "llmeter": "scripts/llmeter-cli.mjs"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "tauri": "tauri",
+    "cli": "node scripts/llmeter-cli.mjs",
+    "bundle:llama": "node scripts/stage-llama-server.mjs",
+    "license:node": "license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow 'MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;ISC;Zlib;Unicode-3.0'",
+    "license:rust": "cargo deny --manifest-path src-tauri/Cargo.toml check licenses",
+    "license:check": "npm run license:node && npm run license:rust"
+  },
+  "dependencies": {
+    "@mantine/core": "^8.3.8",
+    "@mantine/hooks": "^8.3.8",
+    "@tauri-apps/api": "^2.10.0",
+    "bootstrap-icons": "^1.13.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "license-checker-rseidelsohn": "^4.4.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4"
+  },
+  "license": "MIT"
+}

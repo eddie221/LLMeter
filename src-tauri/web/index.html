@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LLMeter Web Dashboard</title>
+  <link rel="stylesheet" href="/web/assets/vendor/bootstrap-icons/bootstrap-icons.css" />
+  <link rel="stylesheet" href="/web/assets/dashboard.css" />
+</head>
+<body>
+  <section id="auth" class="auth">
+    <div class="card stack">
+      <div>
+        <h1 id="authTitle">Sign In</h1>
+        <p id="authSubtitle">Log in before viewing the dashboard.</p>
+      </div>
+      <div id="authError" class="card error" hidden></div>
+      <label for="username">Username</label>
+      <input id="username" autocomplete="username" />
+      <label id="displayNameLabel" for="displayName" hidden>True name</label>
+      <input id="displayName" hidden />
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" />
+      <p id="authPasswordPolicy" class="passwordPolicy" hidden>At least 12 characters with uppercase, lowercase, number, and symbol.</p>
+      <button id="authSubmit">Log in</button>
+    </div>
+  </section>
+
+  <main id="dashboard" class="stack" hidden>
+    <header>
+      <div>
+        <h1>AI Server Monitor <span>proxy dashboard</span></h1>
+      </div>
+      <div class="topbar">
+        <span class="statusDot"></span><span class="muted">Server running</span><span id="adminBadge" class="adminBadge" hidden>Admin Mode</span><span id="signedIn" class="muted"></span>
+        <button id="logout">Log out</button>
+      </div>
+    </header>
+
+    <nav class="tabs"><button class="tab active" data-tab="dashboard">Dashboard</button><button class="tab" data-tab="chat">Chat</button><button class="tab" data-tab="server">Server</button><button class="tab" data-tab="logs">Logs</button><button id="adminTab" class="tab" data-tab="admin" hidden>Admin</button><button class="tab" data-tab="profile">Profile</button></nav>
+
+    <section id="error" class="card error" hidden></section>
+
+    <section id="panel-dashboard" class="stack">
+      <div class="filters"><button class="active" data-scope="all">All users</button><button class="secondary" data-scope="mine">Mine</button><button class="secondary" data-range="all">All time</button><button class="secondary" data-range="today">Today</button><button class="active" data-range="7d">7 days</button><button class="secondary" data-range="30d">30 days</button><button class="secondary" data-range="custom">Custom...</button><button id="downloadOverviewCsv" class="secondary">Download CSV</button></div>
+
+      <section class="grid">
+        <div class="card metric"><span>Total requests</span><strong id="requests">0</strong><div id="requestsSpark"></div></div>
+        <div class="card metric"><span>Input tokens</span><strong id="inputTokens">0</strong><div id="inputSpark"></div></div>
+        <div class="card metric"><span>Output tokens</span><strong id="outputTokens">0</strong><div id="outputSpark"></div></div>
+        <div class="card metric"><span>Total tokens</span><strong id="totalTokens">0</strong><div id="totalSpark"></div></div>
+      </section>
+
+      <section class="dashboardGrid">
+        <div class="card dailyUsagePanel">
+          <div class="dailyUsageHeader"><h2>Usage</h2><div class="usageToolbar"><span class="usagePill usageStaticPill">Default project ×</span><button id="rangePill" class="usagePill usageDatePill">Last 7 days</button><button id="refreshUsage" class="usagePill">Refresh</button></div></div>
+          <div class="usageRangeRail dailyUsageRangeRail"><button class="secondary" data-range="today">Today</button><button class="active" data-range="7d">Last 7 days</button><button class="secondary" data-range="30d">Last 30 days</button><button class="secondary" data-range="custom">Custom</button></div>
+          <div id="dailyModelChart"><p>No token usage yet.</p></div>
+        </div>
+        <div class="card">
+          <h2>Model breakdown</h2>
+          <div class="tableWrap">
+            <table>
+              <thead><tr><th>Model</th><th>Provider</th><th>Requests</th><th>Input</th><th>Output</th><th>Total</th></tr></thead>
+              <tbody id="models"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section id="panel-logs" class="card" hidden>
+      <h2>Logs</h2>
+      <div class="tableToolbar">
+        <input id="search" placeholder="Search logs" />
+        <div class="tableControls">
+          <button id="refresh">Refresh</button>
+          <label>Rows <select id="logsShown"><option>25</option><option>50</option><option>100</option></select></label>
+          <button id="logsPrev" class="ghostButton">Previous</button>
+          <span id="logsPage">Page 1 / 1</span>
+          <button id="logsNext" class="ghostButton">Next</button>
+        </div>
+      </div>
+      <div id="logColumnToggles" class="columnToggles"></div>
+      <div class="tableWrap">
+        <table class="centeredTable">
+          <thead id="logsHead"></thead>
+          <tbody id="logs"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="panel-server" class="card" hidden>
+      <h2>Server</h2>
+      <div class="serverControlSummary">
+        <strong>Loaded model view</strong>
+        <span>This page shows models already in RAM and their active settings. Start or stop the API server from the desktop app or CLI.</span>
+      </div>
+      <div class="tableToolbar">
+        <h2 style="padding:0;">Loaded models</h2>
+        <div class="tableControls"><button id="refreshServer">Refresh</button></div>
+      </div>
+      <div id="serverModels" class="serverModelGrid"></div>
+    </section>
+
+    <section id="panel-chat" class="card chatPanel" hidden>
+      <div class="chatLayout">
+        <aside class="chatSidebar">
+          <div class="chatSidebarHeader">
+            <h2>Chats</h2>
+            <button id="chatSortToggle" class="chatSidebarMenuBtn"><i class="bi bi-three-dots"></i></button>
+          </div>
+          <div id="chatSortMenu" class="chatSortMenu" hidden>
+            <p>Sort by</p>
+            <button data-chat-sort="created">Date created</button>
+            <button data-chat-sort="updated">Date updated</button>
+            <button data-chat-sort="tokens">Conversation length (tokens)</button>
+            <hr />
+            <p>Sort direction</p>
+            <button data-chat-direction="asc">Oldest first</button>
+            <button data-chat-direction="desc">Newest first</button>
+            <hr />
+            <button id="toggleChatTokenCount">Show token count in listings</button>
+          </div>
+          <input id="chatSearch" class="chatSidebarSearch" placeholder="Search chats..." />
+          <button id="newChatGroup" class="chatSidebarCreateBtn"><i class="bi bi-folder-plus"></i> New Folder</button>
+          <div id="chatGroups" class="chatGroups"></div>
+          <div class="chatSidebarHeader">
+            <h2>Chats</h2>
+            <button id="newChatSession" class="ghostButton">+ Chat</button>
+          </div>
+          <div id="chatSessions" class="chatSessions"></div>
+        </aside>
+        <section class="chatMain">
+          <div class="chatTopbar">
+            <label class="chatTitleField">Session<input id="chatTitle" placeholder="Session title" /></label>
+            <label class="chatModelField">Response model<select id="chatModel"></select></label>
+            <div class="chatActionGroup">
+              <button id="renameChatSession" class="ghostButton">Rename</button>
+              <button id="deleteChatSession" class="dangerButton">Delete</button>
+            </div>
+          </div>
+          <textarea id="chatSystemPrompt" placeholder="System prompt (optional)"></textarea>
+          <div id="chatMessages" class="chatMessages"></div>
+          <div id="chatAttachmentTray" class="chatAttachmentTray" hidden></div>
+          <div class="chatComposer">
+            <input id="chatFileInput" type="file" multiple hidden />
+            <button id="attachChatFile" class="ghostButton">Attach</button>
+            <textarea id="chatInput" placeholder="Send a message to the selected model"></textarea>
+            <button id="sendChat">Send</button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="panel-profile" class="card" hidden>
+      <h2>Profile</h2>
+      <p class="muted">Personal account and API keys.</p>
+      <div id="profileSaved" class="card successCard" hidden>Profile saved.</div>
+      <div class="card stack profileForm">
+        <label>Username <input id="profileUsernameInput" /></label>
+        <label>True name <input id="profileNameInput" /></label>
+        <label>New password <input id="profilePasswordInput" type="password" placeholder="Leave blank to keep current password" /></label>
+        <p class="passwordPolicy">At least 12 characters with uppercase, lowercase, number, and symbol.</p>
+        <p class="profileRoleLine">Role: <strong id="profileRole">-</strong></p>
+        <p class="profileRoleLine">User ID: <code id="profileUid">-</code></p>
+        <div class="topbar profileActions"><button id="saveProfile">Save</button></div>
+      </div>
+      <div id="profileSecretCard" class="card secretCard" hidden></div>
+      <div class="tableToolbar">
+        <h2 style="padding:0;">Personal API keys</h2>
+        <div class="tableControls">
+          <button id="openKeyModal">Create key</button>
+          <label>Rows <select id="profileKeysShown"><option>25</option><option>50</option><option>100</option></select></label>
+          <button id="profileKeysPrev" class="ghostButton">Previous</button>
+          <span id="profileKeysPage">Page 1 / 1</span>
+          <button id="profileKeysNext" class="ghostButton">Next</button>
+        </div>
+      </div>
+      <div class="tableWrap">
+        <table class="centeredTable">
+          <thead><tr><th>Label</th><th>Prefix</th><th>Delete</th></tr></thead>
+          <tbody id="profileKeys"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="panel-admin" class="stack" hidden>
+      <div class="adminForms">
+        <div class="card stack">
+          <h2>Create user</h2>
+          <label>Username <input id="adminNewUsername" /></label>
+          <label>True name <input id="adminNewName" /></label>
+          <label>Password <input id="adminNewPassword" type="password" /></label>
+          <p class="passwordPolicy">At least 12 characters with uppercase, lowercase, number, and symbol.</p>
+          <label>Role <select id="adminNewRole"><option value="user">user</option><option value="admin">admin</option></select></label>
+          <button id="adminCreateUser">Create</button>
+        </div>
+        <div class="card stack">
+          <h2>Create API key</h2>
+          <label>User <select id="adminKeyUser"></select></label>
+          <label>Label <input id="adminKeyLabel" placeholder="Example: Local tool" /></label>
+          <button id="adminCreateKey">Create key</button>
+        </div>
+      </div>
+      <div id="adminSecretCard" class="card secretCard" hidden></div>
+      <div class="card">
+        <div class="tableToolbar">
+          <h2 style="padding:0;">Users</h2>
+          <div class="tableControls">
+            <label>Rows <select id="adminUsersShown"><option>25</option><option>50</option><option>100</option></select></label>
+            <button id="adminUsersPrev" class="ghostButton">Previous</button>
+            <span id="adminUsersPage">Page 1 / 1</span>
+            <button id="adminUsersNext" class="ghostButton">Next</button>
+          </div>
+        </div>
+        <div class="tableWrap">
+          <table class="centeredTable">
+            <thead><tr><th>Username</th><th>True name</th><th>Role</th><th>Enabled</th><th>Delete</th></tr></thead>
+            <tbody id="adminUsers"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="tableToolbar">
+          <h2 style="padding:0;">API keys</h2>
+          <div class="tableControls">
+            <label>Rows <select id="adminKeysShown"><option>25</option><option>50</option><option>100</option></select></label>
+            <button id="adminKeysPrev" class="ghostButton">Previous</button>
+            <span id="adminKeysPage">Page 1 / 1</span>
+            <button id="adminKeysNext" class="ghostButton">Next</button>
+          </div>
+        </div>
+        <div class="tableWrap">
+          <table class="centeredTable">
+            <thead><tr><th>Username</th><th>True name</th><th>Label</th><th>Prefix</th><th>Delete</th></tr></thead>
+            <tbody id="adminKeys"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="logModal" class="modalBackdrop" hidden>
+    <div class="modalCard">
+      <div class="modalHeader"><h2>Request details</h2><button id="closeLogModal" class="ghostButton">Close</button></div>
+      <div id="logDetail" class="detailGrid"></div>
+    </div>
+  </div>
+
+  <div id="keyModal" class="modalBackdrop" hidden>
+    <div class="modalCard">
+      <div class="modalHeader"><h2>Create API key</h2><button id="closeKeyModal" class="ghostButton">Close</button></div>
+      <div class="stack">
+        <label for="keyDescription" class="muted">Description</label>
+        <input id="keyDescription" placeholder="Example: Claude Code, web dashboard, test client" />
+        <div id="createdKeySecret" class="secretBox" hidden></div>
+        <div class="topbar"><button id="createProfileKey">Create</button><button id="cancelKeyModal" class="ghostButton">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="dateRangeModal" class="modalBackdrop" hidden>
+    <div class="dateRangeCard">
+      <div class="rangePresetList">
+        <button data-range-preset="week">Week to date</button>
+        <button data-range-preset="month">Month to date</button>
+        <button data-range-preset="7d">Last 7 days</button>
+        <button data-range-preset="14d">Last 14 days</button>
+        <button data-range-preset="30d">Last 30 days</button>
+      </div>
+      <div class="rangeCalendarPane">
+        <button id="rangePrevMonth" class="rangeNavButton">‹</button>
+        <div id="rangeMonths" class="rangeCalendarMonths"></div>
+        <button id="rangeNextMonth" class="rangeNavButton">›</button>
+        <div class="rangePickerActions">
+          <span id="rangeDraftLabel" class="muted">Start → End</span>
+          <div class="topbar"><button id="applyDateRange">Apply</button><button id="closeDateRange" class="ghostButton">Cancel</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/web/assets/dashboard.js"></script>
+</body>
+</html>

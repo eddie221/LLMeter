@@ -1,0 +1,45 @@
+# Build outputs
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Tauri installers
+*.app
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+*.msi
+
+# Dependencies
+node_modules/
+
+# Generated analysis
+graphify-out/
+
+# Partial downloads
+*.part
+*.gguf.part
+*.download.part
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Vite / TypeScript cache
+.vite/
+*.tsbuildinfo

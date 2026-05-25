@@ -1,0 +1,121 @@
+.authPage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 36px;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+
+.authCard {
+  width: min(440px, 100%);
+  padding: 40px 48px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.authCard h1 {
+  font-size: 20px;
+  letter-spacing: -0.03em;
+}
+
+.authCard .mantine-Text-root {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.authCard label,
+.mantine-InputWrapper-label {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.mantine-TextInput-input,
+.mantine-PasswordInput-input,
+.mantine-NumberInput-input,
+.mantine-Select-input,
+.mantine-Textarea-input {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.mantine-TextInput-input:focus,
+.mantine-PasswordInput-input:focus,
+.mantine-NumberInput-input:focus,
+.mantine-Select-input:focus,
+.mantine-Textarea-input:focus {
+  border-color: var(--blue);
+}
+
+.authCard .mantine-Input-input {
+  height: 40px;
+  font-size: 13px;
+}
+
+.mantine-Button-root {
+  background: var(--button-bg, var(--blue));
+  border-color: var(--button-bd, var(--blue));
+  color: var(--button-color, white);
+  border-radius: 7px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.mantine-Button-root:not(:disabled):not([data-disabled]):not([data-loading]):hover {
+  background: var(--button-hover, #2563eb);
+  color: var(--button-hover-color, white);
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35);
+}
+
+.mantine-Button-root[data-variant="default"]:not(:disabled):not([data-disabled]):not([data-loading]):hover,
+.mantine-Button-root[data-variant="subtle"]:not(:disabled):not([data-disabled]):not([data-loading]):hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--line);
+  box-shadow: none;
+  color: var(--text);
+}
+
+.mantine-Switch-track[data-checked] {
+  background: var(--blue);
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.mantine-Switch-track[data-checked] .mantine-Switch-thumb {
+  background: #fff;
+  border-color: #fff;
+}
+
+.authCard .mantine-Button-root {
+  height: 40px;
+  margin-top: 10px;
+}
+
+.passwordRules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.passwordRule {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 6px;
+  transition: background 150ms, border-color 150ms, color 150ms;
+}
+
+.passwordRule.met {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: var(--green);
+}

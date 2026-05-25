@@ -1,0 +1,120 @@
+.appSettingsCard {
+  background: linear-gradient(180deg, rgba(24, 29, 42, 0.96), rgba(14, 18, 28, 0.98));
+  border-color: var(--line);
+}
+
+.storagePathRow {
+  background: rgba(10, 14, 22, 0.62);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.storagePathText {
+  display: grid;
+  gap: 4px;
+}
+
+.storagePathValue {
+  align-items: center;
+}
+
+.storagePathValue .mantine-TextInput-root {
+  flex: 1;
+  min-width: 0;
+}
+
+.settingsModalContent {
+  background: linear-gradient(180deg, #1b1f2b 0%, #151923 100%);
+  border: 1px solid #30384d;
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.settingsModalHeader {
+  background: transparent;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 18px 22px;
+}
+
+.settingsModalTitle {
+  color: var(--text);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.settingsModalBody {
+  padding: 18px 22px 22px;
+}
+
+.settingsPanel {
+  color: var(--text);
+}
+
+.settingsSection {
+  background: rgba(13, 17, 23, 0.42);
+  border-color: #30384d;
+  padding: 18px;
+}
+
+.settingsSection:hover {
+  border-color: #3b4661;
+}
+
+.settingsSectionLabel {
+  color: #91a3bd;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+
+.settingsPanel .mantine-InputWrapper-description {
+  color: #718199;
+}
+
+.settingsPanel .mantine-Input-input {
+  background: var(--bg);
+  border-color: #30384d;
+}
+
+.settingsPanel .mantine-Input-input:focus,
+.settingsPanel .mantine-Input-input:focus-within {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+
+.settingsPanel .mantine-Switch-track {
+  background: #101621;
+  border-color: #30384d;
+}
+
+.settingsPanel .mantine-Switch-input:checked + .mantine-Switch-track,
+.settingsPanel .mantine-Switch-track[data-checked] {
+  background: linear-gradient(90deg, rgba(40, 167, 69, 0.95), rgba(97, 196, 109, 0.95));
+  border-color: #72df82;
+  box-shadow: 0 0 0 2px rgba(97, 196, 109, 0.2), 0 0 24px rgba(97, 196, 109, 0.56);
+}
+
+.settingsPanel .mantine-Switch-input:checked + .mantine-Switch-track .mantine-Switch-thumb,
+.settingsPanel .mantine-Switch-track[data-checked] .mantine-Switch-thumb {
+  background: #eaffee;
+  border-color: #eaffee;
+  box-shadow: 0 0 10px rgba(234, 255, 238, 0.72);
+}
+
+.settingsSwitchAfterInputs {
+  margin-top: 12px;
+}
+
+.settingsSaved {
+  background: rgba(34, 107, 57, 0.22);
+  border-color: rgba(97, 196, 109, 0.7);
+}
+
+.settingsActions {
+  padding-top: 2px;
+}

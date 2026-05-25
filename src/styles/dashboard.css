@@ -1,0 +1,421 @@
+.usageToolbar {
+  justify-content: flex-end;
+}
+
+.usagePill,
+.usageIconButton {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(125, 140, 163, 0.34);
+  border-radius: 999px;
+  color: var(--text);
+  display: inline-flex;
+  font-weight: 800;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 18px;
+}
+
+.usagePill:hover,
+.usageIconButton:hover {
+  background: rgba(125, 140, 163, 0.13);
+  border-color: rgba(125, 140, 163, 0.52);
+}
+
+.usageDatePill {
+  min-width: 180px;
+}
+
+.usageRangeRail {
+  gap: 10px;
+  padding: 0 0 4px;
+}
+
+.usageRangeChip {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--muted);
+  font-weight: 800;
+  padding: 0 16px;
+}
+
+.usageRangeChip:hover {
+  background: rgba(125, 140, 163, 0.12);
+  border-color: rgba(125, 140, 163, 0.24);
+  color: var(--text);
+}
+
+.usageRangeChip.active {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(255, 255, 255, 0.92);
+  color: #111318;
+}
+
+.dailyUsagePanel {
+  background: #1d1f24;
+  border-color: rgba(125, 140, 163, 0.22);
+  padding: 0;
+  overflow: hidden;
+}
+
+.dailyUsageHeader {
+  border-bottom: 1px solid rgba(125, 140, 163, 0.18);
+  padding: 18px 24px;
+}
+
+.dailyUsageHeader h3 {
+  font-size: 28px;
+  letter-spacing: -0.04em;
+}
+
+.dailyUsageRangeRail {
+  padding: 14px 24px 0;
+}
+
+.dailyUsagePanel .modelTokenChartWrap {
+  margin-top: 0;
+  padding: 4px 24px 24px;
+}
+
+.dailyUsagePanel .modelTokenChart {
+  height: 380px;
+}
+
+/* ── Range date picker ── */
+.rangePickerShell {
+  background: #2d2d2d;
+  border: 1px solid #444;
+  border-radius: 18px;
+  display: grid;
+  grid-template-columns: 230px minmax(620px, 1fr);
+  margin: -8px;
+  overflow: hidden;
+}
+
+.rangePresetList {
+  border-right: 1px solid #4a4a4a;
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding: 28px 26px;
+}
+
+.rangePresetList button,
+.rangeNavButton,
+.rangeCalendarGrid button {
+  background: transparent;
+  border: 0;
+  color: #f1f1f1;
+  cursor: pointer;
+  font: inherit;
+}
+
+.rangePresetList button {
+  border-radius: 10px;
+  font-size: 22px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.rangePresetList button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.rangeCalendarPane {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  padding: 26px 20px 18px;
+}
+
+.rangeCalendarMonths {
+  display: grid;
+  gap: 52px;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+}
+
+.rangeCalendarTitle {
+  color: #eeeeee;
+  font-size: 22px;
+  font-weight: 800;
+  margin-bottom: 28px;
+  text-align: center;
+}
+
+.rangeCalendarWeekdays,
+.rangeCalendarGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 40px);
+  justify-content: center;
+}
+
+.rangeCalendarWeekdays span {
+  color: #a7a7a7;
+  font-size: 20px;
+  text-align: center;
+}
+
+.rangeCalendarGrid {
+  gap: 8px 6px;
+  margin-top: 22px;
+}
+
+.rangeCalendarGrid button {
+  border-radius: 10px;
+  color: #dedede;
+  font-size: 22px;
+  height: 40px;
+  position: relative;
+}
+
+.rangeCalendarGrid button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.rangeCalendarGrid button.inRange {
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.rangeCalendarGrid button.selected {
+  background: #f4f4f4;
+  color: #111;
+  border-radius: 999px;
+}
+
+.rangeCalendarGrid button:disabled {
+  color: rgba(255, 255, 255, 0.25);
+  cursor: not-allowed;
+}
+
+.rangeNavButton {
+  color: #9f9f9f;
+  font-size: 44px;
+  line-height: 1;
+  padding-top: 4px;
+}
+
+.rangePickerActions {
+  align-items: center;
+  display: flex;
+  grid-column: 2;
+  justify-content: space-between;
+  margin-top: 22px;
+}
+
+/* ── Metric cards ── */
+.metricCard {
+  min-height: 150px;
+  padding: 18px 22px;
+}
+
+.metricCard .mantine-Text-root {
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.metricCard h1 {
+  margin-top: 8px;
+  font-size: 28px;
+}
+
+.metricSparkline {
+  display: block;
+  height: 58px;
+  margin-top: 18px;
+  width: 100%;
+}
+
+.metricSparklinePath {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.metricSparklinePoint {
+  fill: var(--panel);
+  stroke-width: 3;
+}
+
+.spark-blue { stroke: var(--blue); }
+.spark-green { stroke: var(--green); }
+.spark-purple { stroke: var(--purple); }
+.spark-orange { stroke: var(--orange); }
+
+.metricSparklinePath.spark-blue { filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.3)); }
+.metricSparklinePath.spark-green { filter: drop-shadow(0 0 6px rgba(97, 196, 109, 0.3)); }
+.metricSparklinePath.spark-purple { filter: drop-shadow(0 0 6px rgba(155, 92, 246, 0.3)); }
+.metricSparklinePath.spark-orange { filter: drop-shadow(0 0 6px rgba(255, 138, 51, 0.3)); }
+
+.metric-blue h1 { color: var(--blue); }
+.metric-green h1 { color: var(--green); }
+.metric-purple h1 { color: var(--purple); }
+.metric-orange h1 { color: var(--orange); }
+
+/* ── Line / token charts ── */
+.lineChartWrap {
+  margin-top: 16px;
+  min-height: 260px;
+}
+
+.lineChart {
+  display: block;
+  width: 100%;
+  height: 260px;
+}
+
+.lineChartEmpty {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+}
+
+.modelTokenChartWrap {
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
+.modelTokenChart {
+  display: block;
+  height: 320px;
+  min-width: 720px;
+  width: 100%;
+}
+
+.modelLegend {
+  border-top: 1px solid var(--line-soft);
+  margin-top: 8px;
+  padding-top: 12px;
+}
+
+.modelLegendButton {
+  align-items: center;
+  background: rgba(125, 140, 163, 0.08);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.modelLegendButton:hover {
+  background: rgba(125, 140, 163, 0.14);
+  border-color: #3b4661;
+}
+
+.modelLegendButton.inactive {
+  color: var(--muted);
+  opacity: 0.42;
+}
+
+.chartGrid {
+  stroke: rgba(125, 140, 163, 0.14);
+  stroke-width: 1;
+}
+
+.chartTooltip {
+  pointer-events: none;
+}
+
+.chartTooltip rect {
+  fill: rgba(13, 17, 23, 0.96);
+  stroke: #3b4661;
+  stroke-width: 1;
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.35));
+}
+
+.chartTooltipTitle {
+  fill: var(--text);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.chartTooltipText {
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.chartTooltipValue {
+  fill: var(--text);
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.chartTooltipDivider {
+  stroke: rgba(125, 140, 163, 0.32);
+  stroke-width: 1;
+}
+
+.chartAxisText {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chartAxisTitle {
+  fill: var(--muted);
+  font-size: 14px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.zeroUsageBar {
+  fill: rgba(255, 255, 255, 0.92);
+  opacity: 0.9;
+}
+
+.chartLine {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3.2;
+}
+
+.chartLineTotal {
+  filter: drop-shadow(0 0 8px rgba(255, 138, 51, 0.32));
+  stroke: var(--orange);
+}
+
+.chartLineInput {
+  filter: drop-shadow(0 0 8px rgba(97, 196, 109, 0.28));
+  stroke: var(--green);
+}
+
+.chartLineOutput {
+  filter: drop-shadow(0 0 8px rgba(155, 92, 246, 0.28));
+  stroke: var(--purple);
+}
+
+.chartPointTotal {
+  fill: var(--panel);
+  stroke: var(--orange);
+  stroke-width: 3;
+}
+
+.chartLegend .mantine-Text-root {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  gap: 6px;
+}
+
+.legendDot {
+  border-radius: 999px;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
+.legendTotal { background: var(--orange); }
+.legendInput { background: var(--green); }

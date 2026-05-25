@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & verify — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            rust-target: x86_64-unknown-linux-gnu
+          - os: macos-14            # Apple Silicon runner
+            rust-target: aarch64-apple-darwin
+          - os: windows-2022
+            rust-target: x86_64-pc-windows-msvc
+
+    steps:
+      # ── checkout ────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── system dependencies (Linux only) ────────────────────────────────────
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            pkg-config
+
+      # ── Rust toolchain ───────────────────────────────────────────────────────
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # ── Node.js ──────────────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # ── install JS dependencies ──────────────────────────────────────────────
+      - name: Install npm dependencies
+        run: npm ci
+
+      # ── type-check frontend ──────────────────────────────────────────────────
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      # ── build frontend ───────────────────────────────────────────────────────
+      - name: Build frontend
+        run: npm run build
+
+      # ── build Rust backend (lib + binary, no bundling) ───────────────────────
+      - name: Build Rust backend
+        run: cargo build --manifest-path src-tauri/Cargo.toml
+        env:
+          # Prevent Tauri from trying to load a dev server during CI
+          TAURI_SKIP_DEVSERVER_CHECK: true
+
+      # ── Rust tests ───────────────────────────────────────────────────────────
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+        env:
+          TAURI_SKIP_DEVSERVER_CHECK: true
+
+      # ── CLI smoke test ───────────────────────────────────────────────────────
+      - name: CLI smoke test — help flag (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./src-tauri/target/debug/aiserver user --help
+          ./src-tauri/target/debug/aiserver model --help
+          ./src-tauri/target/debug/aiserver server --help
+
+      - name: CLI smoke test — help flag (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          .\src-tauri\target\debug\aiserver.exe user --help
+          .\src-tauri\target\debug\aiserver.exe model --help
+          .\src-tauri\target\debug\aiserver.exe server --help
+
+      # ── CLI rejects bad credentials ──────────────────────────────────────────
+      - name: CLI smoke test — auth rejection (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          if ./src-tauri/target/debug/aiserver user list -u nobody -p wrong 2>/dev/null; then
+            echo "Expected auth failure but command succeeded" && exit 1
+          fi
+
+      - name: CLI smoke test — auth rejection (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $result = & .\src-tauri\target\debug\aiserver.exe user list -u nobody -p wrong 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "Expected auth failure but command succeeded"
+            exit 1
+          }
