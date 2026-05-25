@@ -92,22 +92,22 @@ jobs:
       - name: CLI smoke test — help flag (Unix)
         if: runner.os != 'Windows'
         run: |
-          ./src-tauri/target/debug/aiserver user --help
-          ./src-tauri/target/debug/aiserver model --help
-          ./src-tauri/target/debug/aiserver server --help
+          ./src-tauri/target/debug/llmeter user --help
+          ./src-tauri/target/debug/llmeter model --help
+          ./src-tauri/target/debug/llmeter server --help
 
       - name: CLI smoke test — help flag (Windows)
         if: runner.os == 'Windows'
         run: |
-          .\src-tauri\target\debug\aiserver.exe user --help
-          .\src-tauri\target\debug\aiserver.exe model --help
-          .\src-tauri\target\debug\aiserver.exe server --help
+          .\src-tauri\target\debug\llmeter.exe user --help
+          .\src-tauri\target\debug\llmeter.exe model --help
+          .\src-tauri\target\debug\llmeter.exe server --help
 
       # ── CLI rejects bad credentials ──────────────────────────────────────────
       - name: CLI smoke test — auth rejection (Unix)
         if: runner.os != 'Windows'
         run: |
-          if ./src-tauri/target/debug/aiserver user list -u nobody -p wrong 2>/dev/null; then
+          if ./src-tauri/target/debug/llmeter user list -u nobody -p wrong 2>/dev/null; then
             echo "Expected auth failure but command succeeded" && exit 1
           fi
 
@@ -115,7 +115,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $result = & .\src-tauri\target\debug\aiserver.exe user list -u nobody -p wrong 2>$null
+          $result = & .\src-tauri\target\debug\llmeter.exe user list -u nobody -p wrong 2>$null
           if ($LASTEXITCODE -eq 0) {
             Write-Error "Expected auth failure but command succeeded"
             exit 1
