@@ -30,16 +30,6 @@ function openInFinder(path: string) {
   void invoke('open_external_url', { url: `file://${target}` });
 }
 
-function OpenFolderButton({ path }: { path: string | null | undefined }) {
-  if (!path) return null;
-  return (
-    <Tooltip label="Reveal in Finder" withArrow>
-      <ActionIcon variant="default" size="lg" onClick={() => openInFinder(path)}>
-        <Bi name="folder2-open" />
-      </ActionIcon>
-    </Tooltip>
-  );
-}
 
 export function SettingsPanel({ currentUser, onSaved }: { currentUser: UserAccount; onSaved?: () => void | Promise<void> }) {
   const { data, error, reload } = useAsyncData<SettingsRecord>(() => invoke('get_settings', { requesterRole: currentUser.role }), [currentUser.role]);
@@ -88,18 +78,7 @@ export function SettingsPanel({ currentUser, onSaved }: { currentUser: UserAccou
             </SimpleGrid>
             <Switch className="settingsSwitchAfterInputs" color="green" label="Allow non-localhost bind" checked={settings.allow_non_localhost} onChange={(e) => updateSettings({ ...settings, allow_non_localhost: e.currentTarget.checked })} />
           </Card>
-          <Card withBorder className="settingsSection">
-            <Text className="settingsSectionLabel">Inference</Text>
-            <TextInput label="Default model" value={settings.default_model ?? ''} onChange={(e) => updateSettings({ ...settings, default_model: e.currentTarget.value || null })} />
-            <Group gap="xs" align="flex-end">
-              <TextInput style={{ flex: 1 }} label="llama-server executable override" description="Optional. Leave blank to use the bundled llama-server shipped with LLMeter." placeholder="Bundled llama-server" value={settings.llama_cpp_path ?? ''} onChange={(e) => updateSettings({ ...settings, llama_cpp_path: e.currentTarget.value || null })} />
-              <OpenFolderButton path={settings.llama_cpp_path} />
-            </Group>
-            <Group gap="xs" align="flex-end">
-              <TextInput style={{ flex: 1 }} label="HF to GGUF converter script" description="Path to llama.cpp convert_hf_to_gguf.py for automatic Hugging Face conversion." placeholder="/path/to/llama.cpp/convert_hf_to_gguf.py" value={settings.hf_convert_script_path ?? ''} onChange={(e) => updateSettings({ ...settings, hf_convert_script_path: e.currentTarget.value || null })} />
-              <OpenFolderButton path={settings.hf_convert_script_path} />
-            </Group>
-          </Card>
+
           <Card withBorder className="settingsSection">
             <Text className="settingsSectionLabel">Access</Text>
             <Switch color="green" label="Require API key for /v1/ endpoints" description={settings.require_api_key ? 'Clients must send a valid Bearer token. Disable for open access.' : 'Open access - no API key required. Enable to restrict access.'} checked={settings.require_api_key} onChange={(e) => updateSettings({ ...settings, require_api_key: e.currentTarget.checked })} />
