@@ -128,6 +128,8 @@ jobs:
     runs-on: ubuntu-22.04
     needs: build
     if: github.event_name == 'push'
+    permissions:
+      contents: write
     outputs:
       release_id: ${{ steps.create.outputs.release_id }}
     steps:
@@ -161,6 +163,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: create-release
     if: github.event_name == 'push'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
