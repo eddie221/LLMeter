@@ -30,13 +30,19 @@ export function hashModuleColor(module: string): string {
 }
 
 export function logLineColor(line: string): string {
-  if (line.startsWith('$ ')) return '#7dd3fc';
-  if (line.startsWith('> ')) return '#a78bfa';
+  // Outbound request marker  →  blue
+  if (line.startsWith('$ ') || line.startsWith('> ')) return '#7dd3fc';
+  // Successful response       →  green
   if (line.startsWith('< 2')) return '#6ee7b7';
+  // Error response / keyword  →  red
   if (line.startsWith('< 4') || line.startsWith('< 5')) return '#f87171';
-  if (/error/i.test(line)) return '#f87171';
-  if (/warn/i.test(line)) return '#fbbf24';
-  if (/\bdebug\b/i.test(line)) return '#6b7280';
+  if (/\berror\b/i.test(line)) return '#f87171';
+  // Warning keyword           →  yellow
+  if (/\bwarn\b/i.test(line)) return '#fbbf24';
+  // Model ready / success states  →  green (info)
+  if (/\bready\b|\bejected\b|\bloaded\b/i.test(line)) return '#6ee7b7';
+  // In-progress / debug states    →  blue (debug)
+  if (/\bgenerating\b|\bdebug\b/i.test(line)) return '#7dd3fc';
   return '#9ca3af';
 }
 

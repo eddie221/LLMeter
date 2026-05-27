@@ -452,6 +452,65 @@
   font-weight: 600;
 }
 
+/* ── HF download file option list ── */
+.hfFileOptionList {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.hfFileOption {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 7px 10px;
+  text-align: left;
+  transition: background 100ms, border-color 100ms, color 100ms;
+  width: 100%;
+}
+
+.hfFileOption:hover {
+  background: rgba(125, 140, 163, 0.1);
+  border-color: #384056;
+  color: var(--text);
+}
+
+.hfFileOption.active {
+  background: rgba(59, 130, 246, 0.10);
+  border-color: rgba(59, 130, 246, 0.40);
+  color: var(--text);
+}
+
+.hfFileOptionLabel {
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hfFileOptionMeta {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 7px;
+}
+
+.hfFileOptionSize {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .hfDownloadBtn {
   font-size: 13px !important;
   font-weight: 600 !important;
@@ -481,8 +540,7 @@
 }
 
 .hfDownloadPanel {
-  max-height: 520px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .hfModelName {

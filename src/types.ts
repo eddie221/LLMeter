@@ -22,3 +22,4 @@ export type HuggingFaceRepoFileRequest = { name: string; size: number | null };
 export type HfFormatFilter = 'all' | 'gguf' | 'transformer';
 export type DownloadProgressPayload = { download_id: string; file_name: string; downloaded_bytes: number; total_bytes: number | null; part_index: number; part_total: number; status: string };
 export type ChatGroup = { id: string; name: string };
+export type SystemMemory = { total_bytes: number; available_bytes: number };

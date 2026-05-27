@@ -289,12 +289,14 @@ impl ModelRuntime {
         loop {
             if start.elapsed() >= timeout {
                 let _ = child.kill().await;
+                self.push_log(format!("[{runtime_name}] ERROR — timed out waiting for llama-server to start (5 min)")).await;
                 return Err("llama-server did not become ready within 5 minutes. \
                      The model may be too large or the executable invalid."
                     .to_string());
             }
             match child.try_wait() {
                 Ok(Some(exit)) => {
+                    self.push_log(format!("[{runtime_name}] ERROR — llama-server exited prematurely: {exit}")).await;
                     return Err(format!(
                         "llama-server exited with {exit}. \
                          Check the executable path and model file in Settings."
@@ -317,6 +319,7 @@ impl ModelRuntime {
         }
 
         tracing::info!("[{}] model ready on port {}", runtime_name, port);
+        self.push_log(format!("[{runtime_name}] Ready — model loaded on :{port}")).await;
         let mut inner = self.inner.lock().await;
         inner.insert(
             runtime_name.clone(),
@@ -349,6 +352,7 @@ impl ModelRuntime {
         for model in &mut loaded {
             let _ = model.child.kill().await;
             let _ = model.child.wait().await;
+            self.push_log(format!("[{}] Model ejected", model.runtime_name)).await;
         }
         Ok(self.statuses().await)
     }
@@ -370,6 +374,7 @@ impl ModelRuntime {
         for model in &mut loaded {
             let _ = model.child.kill().await;
             let _ = model.child.wait().await;
+            self.push_log(format!("[{}] Model ejected", model.runtime_name)).await;
         }
         Ok(self.statuses().await)
     }

@@ -155,6 +155,8 @@ impl ServerManager {
                 get(web_chat_sessions).post(web_save_chat_session),
             )
             .route("/web/chat/sessions/delete", post(web_delete_chat_session))
+            .route("/web/me", get(web_me))
+            .route("/web/logout", post(web_logout))
             .route("/web/profile", post(web_update_profile))
             .route("/web/api-keys", get(web_api_keys).post(web_create_api_key))
             .route("/web/api-keys/delete", post(web_delete_api_key))
@@ -446,10 +448,14 @@ async fn web_setup(
 
 async fn web_login(State(state): State<ApiState>, Json(payload): Json<LoginRequest>) -> Response {
     match state.db.login(payload) {
-        Ok(user) => match state.db.create_api_key(user.id, "Web session".into()) {
-            Ok(key) => Json(json!({ "user": user, "api_key": key.secret })).into_response(),
-            Err(err) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &err),
-        },
+        Ok(user) => {
+            // Replace any existing "Web session" key so they don't accumulate.
+            let _ = state.db.delete_labeled_api_keys(user.id, "Web session");
+            match state.db.create_api_key(user.id, "Web session".into()) {
+                Ok(key) => Json(json!({ "user": user, "api_key": key.secret })).into_response(),
+                Err(err) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &err),
+            }
+        }
         Err(err) => api_error(StatusCode::UNAUTHORIZED, &err),
     }
 }
@@ -876,6 +882,25 @@ async fn web_update_profile(
     }
 }
 
+async fn web_me(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let auth = match authorize(&state.db, &headers) {
+        Ok(Some(auth)) => auth,
+        Ok(None) => return api_error(StatusCode::UNAUTHORIZED, "Invalid or missing API key."),
+        Err(err) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &err),
+    };
+    match state.db.get_user(auth.user_id) {
+        Ok(user) => Json(json!({ "user": user })).into_response(),
+        Err(err) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &err),
+    }
+}
+
+async fn web_logout(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Ok(Some(auth)) = authorize(&state.db, &headers) {
+        let _ = state.db.delete_labeled_api_keys(auth.user_id, "Web session");
+    }
+    Json(json!({ "ok": true })).into_response()
+}
+
 async fn web_api_keys(State(state): State<ApiState>, headers: HeaderMap) -> Response {
     let auth = match authorize(&state.db, &headers) {
         Ok(Some(auth)) => auth,
@@ -889,7 +914,15 @@ async fn web_api_keys(State(state): State<ApiState>, headers: HeaderMap) -> Resp
     };
 
     match state.db.list_api_keys(Some(auth.user_id)) {
-        Ok(keys) => Json(keys).into_response(),
+        Ok(keys) => {
+            // Hide the internal "Web session" key from regular users.
+            // Admins can see all keys via the admin panel.
+            let visible: Vec<_> = keys
+                .into_iter()
+                .filter(|k| k.label != "Web session")
+                .collect();
+            Json(visible).into_response()
+        }
         Err(err) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &err),
     }
 }
@@ -1137,7 +1170,8 @@ async fn chat_completions(
     state
         .runtime
         .push_log(format!(
-            "> POST /v1/chat/completions  model=\"{}\"  messages={}  input=\"{}\"",
+            "> POST /v1/chat/completions  key={}  model=\"{}\"  messages={}  input=\"{}\"",
+            auth.api_key_prefix,
             model,
             payload.messages.len(),
             last_user
@@ -1154,10 +1188,12 @@ async fn chat_completions(
             state
                 .runtime
                 .push_log(format!(
-                    "< 200 OK  in={} out={} total={}",
+                    "< 200 OK  in={} out={} total={}  {}ms  {:.1} tok/s",
                     result.input_tokens,
                     result.output_tokens,
-                    result.input_tokens + result.output_tokens
+                    result.input_tokens + result.output_tokens,
+                    result.time_ms,
+                    if result.time_ms > 0 { result.output_tokens as f64 * 1000.0 / result.time_ms as f64 } else { 0.0 }
                 ))
                 .await;
             let _ = state.db.add_log(&RequestLogRecord {
@@ -1293,7 +1329,8 @@ async fn anthropic_messages(
     state
         .runtime
         .push_log(format!(
-            "> POST /v1/messages  model=\"{}\"  messages={}",
+            "> POST /v1/messages  key={}  model=\"{}\"  messages={}",
+            auth.api_key_prefix,
             model,
             messages.len()
         ))
@@ -1317,10 +1354,12 @@ async fn anthropic_messages(
             state
                 .runtime
                 .push_log(format!(
-                    "< 200 OK  in={} out={} total={}",
+                    "< 200 OK  in={} out={} total={}  {}ms  {:.1} tok/s",
                     result.input_tokens,
                     result.output_tokens,
-                    result.input_tokens + result.output_tokens
+                    result.input_tokens + result.output_tokens,
+                    result.time_ms,
+                    if result.time_ms > 0 { result.output_tokens as f64 * 1000.0 / result.time_ms as f64 } else { 0.0 }
                 ))
                 .await;
             let _ = state.db.add_log(&RequestLogRecord {
@@ -1532,7 +1571,8 @@ async fn simple_chat(
     state
         .runtime
         .push_log(format!(
-            "> POST /api/v1/chat  model=\"{}\"  input=\"{}\"",
+            "> POST /api/v1/chat  key={}  model=\"{}\"  input=\"{}\"",
+            auth.api_key_prefix,
             model,
             truncate(&payload.input, 120)
         ))
@@ -1569,10 +1609,12 @@ async fn simple_chat(
             state
                 .runtime
                 .push_log(format!(
-                    "< 200 OK  in={} out={} total={}",
+                    "< 200 OK  in={} out={} total={}  {}ms  {:.1} tok/s",
                     result.input_tokens,
                     result.output_tokens,
-                    result.input_tokens + result.output_tokens
+                    result.input_tokens + result.output_tokens,
+                    result.time_ms,
+                    if result.time_ms > 0 { result.output_tokens as f64 * 1000.0 / result.time_ms as f64 } else { 0.0 }
                 ))
                 .await;
             let _ = state.db.add_log(&RequestLogRecord {

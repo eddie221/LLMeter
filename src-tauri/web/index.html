@@ -103,14 +103,14 @@
       <div id="serverModels" class="serverModelGrid"></div>
     </section>
 
-    <section id="panel-chat" class="card chatPanel" hidden>
-      <div class="chatLayout">
-        <aside class="chatSidebar">
+    <section id="panel-chat" class="chatFullPage" hidden>
+      <div class="appChatShell">
+        <aside class="appChatSidebar">
           <div class="chatSidebarHeader">
-            <h2>Chats</h2>
+            <span class="chatSidebarHeading">Chats</span>
             <button id="chatSortToggle" class="chatSidebarMenuBtn"><i class="bi bi-three-dots"></i></button>
           </div>
-          <div id="chatSortMenu" class="chatSortMenu" hidden>
+          <div id="chatSortMenu" class="chatSortMenuWeb" hidden>
             <p>Sort by</p>
             <button data-chat-sort="created">Date created</button>
             <button data-chat-sort="updated">Date updated</button>
@@ -122,32 +122,51 @@
             <hr />
             <button id="toggleChatTokenCount">Show token count in listings</button>
           </div>
-          <input id="chatSearch" class="chatSidebarSearch" placeholder="Search chats..." />
+          <input id="chatSearch" class="chatSidebarSearchInput" placeholder="Search chats..." />
           <button id="newChatGroup" class="chatSidebarCreateBtn"><i class="bi bi-folder-plus"></i> New Folder</button>
-          <div id="chatGroups" class="chatGroups"></div>
-          <div class="chatSidebarHeader">
-            <h2>Chats</h2>
-            <button id="newChatSession" class="ghostButton">+ Chat</button>
+          <div id="chatGroups" class="chatFolderList"></div>
+          <div class="chatLooseSectionWeb">
+            <div class="chatSidebarHeader">
+              <span class="chatSidebarTitle">CHATS</span>
+              <button id="newChatSession" class="chatAddGroupBtnWeb">+ Chat</button>
+            </div>
+            <div id="chatSessions"></div>
           </div>
-          <div id="chatSessions" class="chatSessions"></div>
         </aside>
-        <section class="chatMain">
-          <div class="chatTopbar">
-            <label class="chatTitleField">Session<input id="chatTitle" placeholder="Session title" /></label>
-            <label class="chatModelField">Response model<select id="chatModel"></select></label>
-            <div class="chatActionGroup">
+        <section class="appChatMain">
+          <div class="appChatTopbarWeb">
+            <label class="appChatModelControlWeb">
+              <span class="chatTopbarLabelWeb">Model</span>
+              <select id="chatModel"></select>
+            </label>
+            <label class="appChatTitleControlWeb">
+              <span class="chatTopbarLabelWeb">Session</span>
+              <input id="chatTitle" placeholder="Session title" />
+            </label>
+            <div class="appChatTopbarActionsWeb">
               <button id="renameChatSession" class="ghostButton">Rename</button>
               <button id="deleteChatSession" class="dangerButton">Delete</button>
             </div>
           </div>
-          <textarea id="chatSystemPrompt" placeholder="System prompt (optional)"></textarea>
-          <div id="chatMessages" class="chatMessages"></div>
+          <div class="appChatSystemPromptWeb">
+            <textarea id="chatSystemPrompt" placeholder="System prompt (optional)"></textarea>
+          </div>
+          <div id="chatMessages" class="appChatMessages"></div>
           <div id="chatAttachmentTray" class="chatAttachmentTray" hidden></div>
-          <div class="chatComposer">
-            <input id="chatFileInput" type="file" multiple hidden />
-            <button id="attachChatFile" class="ghostButton">Attach</button>
-            <textarea id="chatInput" placeholder="Send a message to the selected model"></textarea>
-            <button id="sendChat">Send</button>
+          <div class="appChatComposer">
+            <div class="chatComposerBox" id="chatComposerBox">
+              <input id="chatFileInput" type="file" multiple hidden />
+              <textarea id="chatInput" class="chatComposerTextarea" placeholder="Send a message..." rows="3"></textarea>
+              <div class="chatComposerToolbar">
+                <div class="chatComposerLeft">
+                  <button id="attachChatFile" class="chatComposerIconBtn" title="Attach file"><i class="bi bi-paperclip"></i></button>
+                </div>
+                <div class="chatComposerRight">
+                  <span class="chatComposerHintWeb">Enter to send · Shift+Enter for new line</span>
+                  <button id="sendChat" class="chatSendCircleBtn"><i class="bi bi-arrow-up"></i></button>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </div>
@@ -183,6 +202,7 @@
           <tbody id="profileKeys"></tbody>
         </table>
       </div>
+
     </section>
 
     <section id="panel-admin" class="stack" hidden>

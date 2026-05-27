@@ -158,6 +158,12 @@ pub async fn run_chat(
         return Err("max_tokens must be greater than 0".into());
     }
 
+    runtime.push_log(format!(
+        "[{}] Generating...  (messages: {})",
+        request.model,
+        request.messages.len()
+    )).await;
+
     if request.model.starts_with("claude-") {
         return run_anthropic_chat(db, request).await;
     }
@@ -306,12 +312,11 @@ async fn run_anthropic_chat(
     request: ChatCompletionRequest,
 ) -> Result<InferenceResult, String> {
     tracing::info!("run_anthropic_chat entered");
-    let settings = db.get_settings()?;
-    let api_key = settings
-        .anthropic_api_key
+    let api_key = db.get_settings().ok()
+        .and_then(|s| s.anthropic_api_key)
         .filter(|k| !k.trim().is_empty())
         .ok_or_else(|| {
-            "Anthropic API key not configured. Set it in Settings before using Claude models."
+            "Anthropic API key not configured. Set it in the desktop app settings."
                 .to_string()
         })?;
 

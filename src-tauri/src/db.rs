@@ -118,6 +118,14 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN model_type TEXT;");
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN mmproj_path TEXT;");
         let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN inference_defaults TEXT;");
+        let _ = conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS user_provider_keys (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                PRIMARY KEY (user_id, provider)
+            );",
+        );
         Ok(())
     }
 
@@ -366,6 +374,17 @@ impl Db {
         Ok(())
     }
 
+    /// Deletes all API keys with a specific label for a user (used to clean up web session keys).
+    pub fn delete_labeled_api_keys(&self, user_id: i64, label: &str) -> Result<(), String> {
+        self.connect()?
+            .execute(
+                "DELETE FROM api_keys WHERE user_id = ?1 AND label = ?2",
+                params![user_id, label],
+            )
+            .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
     pub fn get_api_key(&self, key_id: i64) -> Result<ApiKeyRecord, String> {
         self.connect()?
             .query_row(
@@ -506,18 +525,71 @@ impl Db {
         self.model_store_dir.clone()
     }
 
+    /// Walk model_store_dir recursively and register any .gguf files not already in the DB.
+    pub fn scan_model_store(&self) -> Result<(), String> {
+        if !self.model_store_dir.exists() {
+            return Ok(());
+        }
+        let conn = self.connect()?;
+        let mut stack = vec![self.model_store_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            let entries = match fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) == Some("gguf".to_string()) {
+                    let path_str = path.to_string_lossy().to_string();
+                    // Skip auxiliary files (mmproj, vision encoders) — not standalone loadable models
+                    let lower_name = path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+                    if lower_name.contains("mmproj") { continue; }
+                    // Skip if already tracked
+                    let exists: bool = conn
+                        .query_row("SELECT 1 FROM models WHERE path = ?1", params![path_str], |_| Ok(true))
+                        .unwrap_or(false);
+                    if exists {
+                        continue;
+                    }
+                    let metadata = match fs::metadata(&path) {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("model")
+                        .to_string();
+                    let context_length_max = read_gguf_context_length(&path).ok().flatten();
+                    let name = match self.unique_model_name(&name, &path) {
+                        Ok(n) => n,
+                        Err(_) => continue,
+                    };
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO models (name, path, size_bytes, format, status, context_length_max, created_at) VALUES (?1, ?2, ?3, 'gguf', 'ready', ?4, ?5)",
+                        params![name, path_str, metadata.len() as i64, context_length_max, crate::auth::now_ts()],
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn copy_model_to_store(&self, source: &Path) -> Result<PathBuf, String> {
         fs::create_dir_all(&self.model_store_dir).map_err(|err| err.to_string())?;
         let file_name = source
             .file_name()
             .and_then(|value| value.to_str())
             .ok_or_else(|| "Model path must include a valid file name.".to_string())?;
-        if source
-            .parent()
-            .and_then(|parent| parent.canonicalize().ok())
-            == self.model_store_dir.canonicalize().ok()
-        {
-            return Ok(source.to_path_buf());
+        if let (Ok(canonical_source), Ok(canonical_store)) = (
+            source.canonicalize(),
+            self.model_store_dir.canonicalize(),
+        ) {
+            if canonical_source.starts_with(&canonical_store) {
+                return Ok(source.to_path_buf());
+            }
         }
         let destination = self.unique_model_file_path(file_name)?;
         if source.canonicalize().ok() == destination.canonicalize().ok() {
@@ -893,6 +965,7 @@ impl Db {
             model_daily_usage: collect_rows(model_daily_rows)?,
         })
     }
+
 }
 
 fn validate_role(role: &str) -> Result<(), String> {

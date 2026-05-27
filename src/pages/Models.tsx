@@ -3,11 +3,15 @@ import { listen } from '@tauri-apps/api/event';
 import {
   ActionIcon,
   Badge,
+  Box,
   Button,
   Card,
   Checkbox,
+  Divider,
   Group,
+  Menu,
   Modal,
+  Notification,
   NumberInput,
   Progress,
   Select,
@@ -15,10 +19,12 @@ import {
   Stack,
   Switch,
   Table,
+  Tabs,
   Text,
   TextInput,
   Textarea,
   Title,
+  Tooltip,
 } from '@mantine/core';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -31,7 +37,9 @@ import type {
   LoadedModelStatus,
   ModelLoadSettings,
   ModelRecord,
+  Page,
   ServerStatus,
+  SystemMemory,
   UserAccount,
 } from '../types';
 import { defaultModelLoadSettings } from '../constants';
@@ -44,6 +52,62 @@ import { SettingsPanel } from './Settings';
 import { renderLogLine } from './Logs';
 
 export type HfDownloadOption = { key: string; label: string; size: number | null; files: Array<{ name: string; size: number | null }> };
+
+export type DownloadStatus = 'downloading' | 'done' | 'error' | 'cancelled';
+export type DownloadEntry = {
+  id: string;
+  label: string;
+  sizeBytes: number | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  status: DownloadStatus;
+  startedAt: number;
+  partIndex: number;
+  partTotal: number;
+};
+
+export type Compat = 'fits' | 'tight' | 'too_large' | 'unknown';
+
+// Overhead estimate: 512 MB for KV-cache, buffers, and runtime
+const RAM_OVERHEAD_BYTES = 512 * 1024 * 1024;
+
+export function getCompatibility(sizeBytes: number | null, mem: SystemMemory | null): Compat {
+  if (!sizeBytes || !mem || mem.total_bytes === 0) return 'unknown';
+  const needed = sizeBytes + RAM_OVERHEAD_BYTES;
+  if (needed < mem.total_bytes * 0.50) return 'fits';
+  if (needed < mem.total_bytes * 0.75) return 'tight';
+  return 'too_large';
+}
+
+export function CompatIcon({ compat, size: bytes }: { compat: Compat; size: number | null }) {
+  const labels: Record<Compat, string> = {
+    fits: 'Fits in available RAM',
+    tight: 'May fit — RAM is tight',
+    too_large: 'Exceeds available RAM',
+    unknown: 'RAM usage unknown',
+  };
+  const icons: Record<Compat, string> = {
+    fits: 'check-circle-fill',
+    tight: 'exclamation-triangle-fill',
+    too_large: 'x-circle-fill',
+    unknown: 'question-circle',
+  };
+  const colors: Record<Compat, string> = {
+    fits: '#4ade80',
+    tight: '#facc15',
+    too_large: '#f87171',
+    unknown: '#6b7280',
+  };
+  const _ = bytes; // referenced by tooltip if needed
+  return (
+    <span
+      title={labels[compat]}
+      style={{ color: colors[compat], fontSize: 14, lineHeight: 1, flexShrink: 0, cursor: 'default' }}
+    >
+      <i className={`bi bi-${icons[compat]}`} />
+    </span>
+  );
+}
 
 export function pipelineTagToDisplay(tag: string): { label: string; color: string } {
   switch (tag) {
@@ -210,11 +274,26 @@ export async function enrichHuggingFaceFileSizes(model: HuggingFaceModel): Promi
   return { ...model, siblings };
 }
 
-export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadServerStatus }: { currentUser: UserAccount; serverStatus: ServerStatus | null; setServerStatus: React.Dispatch<React.SetStateAction<ServerStatus | null>>; reloadServerStatus: () => Promise<void> }) {
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <Group justify="space-between" gap="xs" style={{ padding: '3px 0' }}>
+      <Text size="xs" c="dimmed">{label}</Text>
+      <Text size="xs" fw={600} style={{ textAlign: 'right', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</Text>
+    </Group>
+  );
+}
+
+function chatCurlExample(modelName: string, host: string, port: number, variant: 'v1' | 'api' = 'v1'): string {
+  const base = variant === 'v1' ? `http://${host}:${port}/v1` : `http://${host}:${port}/api/v1`;
+  return `curl ${base}/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${modelName}","messages":[{"role":"user","content":"Hello!"}],"stream":false}'`;
+}
+
+export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadServerStatus, setPage, onOpenInChat }: { currentUser: UserAccount; serverStatus: ServerStatus | null; setServerStatus: React.Dispatch<React.SetStateAction<ServerStatus | null>>; reloadServerStatus: () => Promise<void>; setPage?: (page: Page) => void; onOpenInChat?: (modelName: string) => void }) {
   const isAdmin = currentUser.role === 'admin';
-  const { data, error, reload } = useAsyncData<ModelRecord[]>(() => invoke('list_models'), []);
+  const { data, error, reload } = useAsyncData<ModelRecord[]>(async () => { await invoke('scan_model_store'); return invoke('list_models'); }, []);
   const loadedStatus = useAsyncData<LoadedModelStatus[]>(() => invoke('loaded_model_status'), []);
   const modelStore = useAsyncData<string>(() => invoke('get_model_store_dir'), []);
+  const systemMemory = useAsyncData<SystemMemory>(() => invoke('get_system_memory'), []);
   useEffect(() => {
     const id = setInterval(() => { void loadedStatus.reload(); }, 4000);
     return () => clearInterval(id);
@@ -249,7 +328,12 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
   const [modelLoading, setModelLoading] = useState(false);
   const [deletingModelId, setDeletingModelId] = useState<number | null>(null);
   const [modelToDelete, setModelToDelete] = useState<ModelRecord | null>(null);
-  const [refreshingModelTypeId, setRefreshingModelTypeId] = useState<number | null>(null);
+  const [downloadToast, setDownloadToast] = useState<{ message: string; key: number } | null>(null);
+  const [downloads, setDownloads] = useState<Map<string, DownloadEntry>>(new Map());
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [downloadsFilter, setDownloadsFilter] = useState('');
+  const [loadModelOpen, setLoadModelOpen] = useState(false);
+  const [loadModelSearch, setLoadModelSearch] = useState('');
   const [mmprojectPathInput, setMmprojPathInput] = useState('');
   const [savingMmproj, setSavingMmproj] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -288,12 +372,19 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
     catch (err) { setMessage(String(err)); }
   };
 
-  const downloadHuggingFaceModel = async (files: Array<{ url: string; name: string }>, label: string) => {
+  const downloadHuggingFaceModel = async (files: Array<{ url: string; name: string }>, label: string, totalSize: number | null = null) => {
     setMessage(null);
     setHfError(null);
     const downloadId = files.map(file => file.url).join('|');
     setHfDownloading(downloadId);
     setHfDownloadProgress(null);
+    // Register in downloads panel
+    setDownloads(prev => {
+      const next = new Map(prev);
+      next.set(downloadId, { id: downloadId, label, sizeBytes: totalSize, downloadedBytes: 0, totalBytes: totalSize, status: 'downloading', startedAt: Date.now(), partIndex: 1, partTotal: files.length });
+      return next;
+    });
+    setDownloadsOpen(true);
     try {
       for (const [index, file] of files.entries()) {
         await invoke('download_model', {
@@ -307,9 +398,21 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
       }
       await reload();
       await modelStore.reload();
-      setMessage(`Downloaded ${label} into the model folder.`);
+      setDownloads(prev => {
+        const next = new Map(prev);
+        const entry = next.get(downloadId);
+        if (entry) next.set(downloadId, { ...entry, status: 'done' });
+        return next;
+      });
     } catch (err) {
-      setHfError(String(err));
+      const msg = String(err);
+      setDownloads(prev => {
+        const next = new Map(prev);
+        const entry = next.get(downloadId);
+        if (entry) next.set(downloadId, { ...entry, status: msg.toLowerCase().includes('cancel') ? 'cancelled' : 'error' });
+        return next;
+      });
+      if (!msg.toLowerCase().includes('cancel')) setHfError(msg);
     } finally {
       setHfDownloading(null);
       setHfDownloadProgress(null);
@@ -354,7 +457,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
       });
       await refresh();
       await modelStore.reload();
-      setMessage(`Downloaded and converted ${modelId} to GGUF.`);
+      showDownloadToast(`${modelId.split('/').pop() ?? modelId} converted to GGUF`);
     } catch (err) {
       setHfError(String(err));
     } finally {
@@ -435,20 +538,10 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
     }
   };
 
-  const refreshModelType = async (event: React.MouseEvent, model: ModelRecord) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setMessage(null);
-    setRefreshingModelTypeId(model.id);
-    try {
-      await invoke('refresh_model_type', { modelId: model.id, requesterRole: currentUser.role });
-      await reload();
-      setMessage(`Updated type metadata for ${model.name}.`);
-    } catch (err) {
-      setMessage(String(err));
-    } finally {
-      setRefreshingModelTypeId(null);
-    }
+  const showDownloadToast = (message: string) => {
+    const key = Date.now();
+    setDownloadToast({ message, key });
+    window.setTimeout(() => setDownloadToast(prev => prev?.key === key ? null : prev), 5000);
   };
 
   const requestDeleteModel = (event: React.MouseEvent, model: ModelRecord) => {
@@ -527,6 +620,34 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
     const key = fileBaseName(model.path);
     downloadedModelsByFile.set(key, [...(downloadedModelsByFile.get(key) ?? []), model]);
   }
+  const filteredPickerModels = React.useMemo(() =>
+    loadableModels.filter(m =>
+      !loadModelSearch.trim() || m.name.toLowerCase().includes(loadModelSearch.toLowerCase())
+    ),
+    [loadableModels, loadModelSearch]
+  );
+
+  const loadSpecificModel = async (model: ModelRecord) => {
+    setMessage(null);
+    setModelLoading(true);
+    setLoadModelOpen(false);
+    setLoadModelSearch('');
+    try {
+      await invoke('load_model', {
+        modelId: model.id,
+        contextLength,
+        nThreads: nThreads === '' ? 10 : nThreads,
+        loadSettings: currentLoadSettings,
+        requesterRole: currentUser.role,
+      });
+      await refresh();
+      setSelectedLoadedName(null);
+    } catch (err) {
+      setMessage(String(err));
+    } finally {
+      setModelLoading(false);
+    }
+  };
 
   const applySelectedModelSettings = async () => {
     if (!selectedModel) return;
@@ -579,6 +700,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
 
   useEffect(() => {
     if (!importOpen) return;
+    void systemMemory.reload();
     const timer = window.setTimeout(() => {
       void loadHuggingFaceModels(hfSearch, hfFormatFilter, hfSort);
     }, 350);
@@ -595,6 +717,22 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
     listen<DownloadProgressPayload>('model-download-progress', event => {
       if (!active) return;
       setHfDownloadProgress(event.payload);
+      // Keep downloads panel in sync
+      const p = event.payload;
+      setDownloads(prev => {
+        const entry = prev.get(p.download_id);
+        if (!entry) return prev;
+        const next = new Map(prev);
+        next.set(p.download_id, {
+          ...entry,
+          downloadedBytes: p.downloaded_bytes,
+          totalBytes: p.total_bytes ?? entry.totalBytes,
+          partIndex: p.part_index,
+          partTotal: p.part_total,
+          status: p.status === 'done' ? 'done' : p.status === 'cancelled' ? 'cancelled' : 'downloading',
+        });
+        return next;
+      });
     }).then(dispose => {
       if (active) {
         unlisten = dispose;
@@ -607,6 +745,10 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
       unlisten?.();
     };
   }, []);
+
+  const cancelDownload = async (downloadId: string) => {
+    try { await invoke('cancel_download', { downloadId }); } catch {}
+  };
 
   // Poll llama-server logs every 1.5 s
   useEffect(() => {
@@ -625,188 +767,385 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
     if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [logLines]);
 
+  // Auto-select the first loaded model so the settings panel is visible without a manual click
+  const firstLoadedModelName = activeLoadedStatuses[0]?.model_name ?? null;
+  useEffect(() => {
+    if (firstLoadedModelName && !selectedLoadedName) {
+      setSelectedLoadedName(firstLoadedModelName);
+    } else if (!firstLoadedModelName) {
+      setSelectedLoadedName(null);
+    }
+  }, [firstLoadedModelName]);
+
   return (
-    <Group align="flex-start" gap="md" wrap="nowrap">
-      {/* ── Main column ── */}
-      <Stack style={{ flex: 1, minWidth: 0 }}>
+    <Stack w="100%">
         <Header
           title="Server"
           subtitle="Control the local API server, load models into RAM, and manage the model store."
           onRefresh={refresh}
         />
-        {isAdmin && (
-          <Card withBorder p="md" className="serverControlCard">
-            <Group justify="space-between">
-              <Group gap="md">
-                <Group gap="xs">
-                  <Text size="sm" fw={600} c={isRunning ? 'green' : 'dimmed'}>
-                    {isRunning ? 'Running' : 'Stopped'}
-                  </Text>
-                  <Switch checked={isRunning} onChange={toggleServer} size="sm" />
-                </Group>
-                <div className="serverControlCopy">
-                  <Text fw={800} size="sm">{isRunning ? 'API server is accepting client requests' : 'Control service is awake'}</Text>
-                  <Text c="dimmed" size="xs">
-                    {isRunning ? `Clients can use http://${host}:${port}/v1 and /api/v1/chat.` : 'You can still list, import, load, and eject models while the API server is stopped.'}
-                  </Text>
-                </div>
-                {/* <Button size="sm" variant="default" onClick={() => setMcpOpen(true)}>📄 mcp.json</Button> */}
-              </Group>
-              <Group gap="sm">
-                <Text c="dimmed" size="sm">{isRunning ? `Running on ${host}:${port}` : 'API server stopped'}</Text>
-                <Button size="sm" variant="default" onClick={() => setSettingsOpen(true)}>Settings</Button>
-              </Group>
-            </Group>
-          </Card>
-        )}
-
         {message ? <StatusCard message={message} /> : null}
         {error || runtimeError ? <ErrorCard message={error ?? runtimeError ?? ''} /> : null}
 
-        <Title order={3}>Loaded Models</Title>
-        {loadedModels.length > 0 ? (
-          <Stack gap="sm">
-            {loadedModels.map((loadedModel) => {
-              const status = loadedByName.get(loadedModel.name);
-              const selected = selectedLoadedName === loadedModel.name;
-              return <Card key={loadedModel.name} withBorder p={0} className={selected ? 'loadedModelCard selected' : 'loadedModelCard'} onClick={() => { setSelectedModelId(loadedModel.id); setSelectedLoadedName(loadedModel.name); }}>
-                <Group justify="space-between" px="md" pt="md" pb="xs">
-                  <Badge color="green" variant="light" size="lg">READY</Badge>
-                  {status?.port ? <Text c="dimmed" size="sm">internal :{status.port}</Text> : null}
+        <Tabs defaultValue="server">
+          <Tabs.List>
+            <Tabs.Tab value="server">Server</Tabs.Tab>
+            <Tabs.Tab value="models">Models</Tabs.Tab>
+          </Tabs.List>
+
+          {/* ── Server tab ── */}
+          <Tabs.Panel value="server" pt="md">
+            <Group align="flex-start" gap="md" wrap="nowrap">
+              {/* ── Left column ── */}
+              <Stack style={{ flex: 1, minWidth: 0 }}>
+                {isAdmin && (
+                  <Card withBorder p="md" className="serverControlCard">
+                    <Group justify="space-between">
+                      <Group gap="md">
+                        <Group gap="xs">
+                          <Text size="sm" fw={600} c={isRunning ? 'green' : 'dimmed'}>
+                            {isRunning ? 'Running' : 'Stopped'}
+                          </Text>
+                          <Switch checked={isRunning} onChange={toggleServer} size="sm" />
+                        </Group>
+                        <div className="serverControlCopy">
+                          <Text fw={800} size="sm">{isRunning ? 'API server is accepting client requests' : 'Control service is awake'}</Text>
+                          <Text c="dimmed" size="xs">
+                            {isRunning ? `Clients can use http://${host}:${port}/v1 and /api/v1/chat.` : 'You can still list, import, load, and eject models while the API server is stopped.'}
+                          </Text>
+                        </div>
+                      </Group>
+                      <Group gap="sm">
+                        {isRunning
+                          ? <Tooltip label="Copy base URL" withArrow><Button size="sm" variant="subtle" color="dimmed" leftSection={<Bi name="copy" />} onClick={() => navigator.clipboard.writeText(`http://${host}:${port}`)}>{`http://${host}:${port}`}</Button></Tooltip>
+                          : <Text c="dimmed" size="sm">API server stopped</Text>}
+                        <Button size="sm" variant="default" onClick={() => setSettingsOpen(true)}>Settings</Button>
+                      </Group>
+                    </Group>
+                  </Card>
+                )}
+
+                <Group justify="space-between" align="center">
+                  <Title order={3}>Loaded Models</Title>
+                  {isAdmin && (
+                    <Button size="sm" leftSection={<Bi name="play-fill" />} onClick={() => setLoadModelOpen(true)} loading={modelLoading}>
+                      Load Model
+                    </Button>
+                  )}
                 </Group>
-                <Group justify="space-between" px="md" pb="md">
-                  <Group gap="xs">
-                    <Badge variant="default" radius="sm">llm</Badge>
-                    <Text className="mono" c="teal" fw={600}>{loadedModel.name}</Text>
-                    <ActionIcon variant="subtle" size="sm" title="Copy model name" onClick={(event) => { event.stopPropagation(); navigator.clipboard.writeText(loadedModel.name); }}><Bi name="copy" /></ActionIcon>
-                  </Group>
-                  <Group gap="lg">
-                    <Text size="sm" c="dimmed">Size <Text span fw={700} c="white">{formatBytes(loadedModel.size_bytes)}</Text></Text>
-                    {status?.context_length ? <Text size="sm" c="dimmed">Context <Text span fw={700} c="white">{status.context_length.toLocaleString()}</Text></Text> : null}
-                    {status?.n_threads ? <Text size="sm" c="dimmed">Threads <Text span fw={700} c="white">{status.n_threads}</Text></Text> : null}
-                    {isAdmin && <Button size="xs" color="red" variant="light" leftSection={<Bi name="eject" />} onClick={(event) => { event.stopPropagation(); void ejectModel(loadedModel.name); }}>Eject</Button>}
-                    {isAdmin && <Button size="xs" color="red" variant="light" loading={deletingModelId === loadedModel.id} disabled={deletingModelId !== null && deletingModelId !== loadedModel.id} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => requestDeleteModel(event, loadedModel)}>Delete</Button>}
-                  </Group>
-                </Group>
-              </Card>;
-            })}
-          </Stack>
-        ) : (
-          <EmptyState
-            title="No model loaded"
-            description={isAdmin ? 'Select an available model below, review Load Settings, then load it into RAM. The API server can stay stopped while you prepare models.' : 'No model is loaded yet. Ask an admin to load one before chatting.'}
-          />
-        )}
 
-        <Group justify="space-between" align="center">
-          <Title order={3}>Available Models</Title>
-          <TableControls shown={modelsShown} onShownChange={(value) => { setModelsShown(value); setModelsPage(0); }} page={modelsPageData.page} totalPages={modelsPageData.totalPages} onPageChange={setModelsPage}>
-            {isAdmin && <Button size="xs" variant="default" onClick={() => setImportOpen(true)}>↓ Import Model</Button>}
-          </TableControls>
-        </Group>
-        <Card withBorder>
-          <Table.ScrollContainer minWidth={600}>
-            <Table highlightOnHover>
-              <Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Format</Table.Th><Table.Th>Type / Inputs</Table.Th><Table.Th>Status</Table.Th><Table.Th>Size</Table.Th>{isAdmin ? <Table.Th>Action</Table.Th> : null}</Table.Tr></Table.Thead>
-              <Table.Tbody>
-                {visibleModels.map(model => (
-                  <Table.Tr key={model.id} className={selectedModel?.id === model.id && !selectedLoadedName ? 'selectableModelRow selected' : 'selectableModelRow'} onClick={() => { setSelectedModelId(model.id); setSelectedLoadedName(null); }}>
-                    <Table.Td>{model.name}</Table.Td>
-                    <Table.Td>{model.format}</Table.Td>
-                    <Table.Td><ModelTypeBadge model={model} /></Table.Td>
-                    <Table.Td><Badge color={loadedBaseIds.has(model.id) ? 'green' : 'gray'} variant={loadedBaseIds.has(model.id) ? 'light' : 'outline'}>{loadedBaseIds.has(model.id) ? 'loaded' : 'unloaded'}</Badge></Table.Td>
-                    <Table.Td>{formatBytes(model.size_bytes)}</Table.Td>
-                    {isAdmin ? <Table.Td><Group gap="xs" wrap="nowrap">{model.hf_repo ? <Button size="xs" variant="default" loading={refreshingModelTypeId === model.id} disabled={refreshingModelTypeId !== null && refreshingModelTypeId !== model.id} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => void refreshModelType(event, model)}>Refresh type</Button> : null}<Button size="xs" color="red" variant="light" loading={deletingModelId === model.id} disabled={deletingModelId !== null && deletingModelId !== model.id} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => requestDeleteModel(event, model)}>Delete</Button></Group></Table.Td> : null}
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </Table.ScrollContainer>
-          {(data?.length ?? 0) === 0 ? <EmptyState title="No imported models" description={isAdmin ? 'Import a local GGUF file or download a compatible model from Hugging Face to get started.' : 'No models are available yet. Ask an admin to import or download one.'} compact /> : null}
-        </Card>
-
-        {isAdmin && (
-          <Card withBorder p={0} style={{ overflow: 'hidden' }}>
-            <Group justify="space-between" px="md" py="xs" style={{ borderBottom: '1px solid var(--mantine-color-dark-4)' }}>
-              <Text size="sm" fw={700}>Logs</Text>
-              <Button size="xs" variant="subtle" color="dimmed" onClick={async () => { await invoke('clear_model_logs', { requesterRole: currentUser.role }); setLogLines([]); }}>Clear</Button>
-            </Group>
-            <div ref={logContainerRef} style={{ height: 400, overflowY: 'auto', background: 'var(--mantine-color-dark-9)', padding: '10px 14px', fontFamily: 'ui-monospace, monospace', fontSize: 12, lineHeight: 1.6 }}>
-              {logLines.length === 0
-                ? <span style={{ color: '#4b5563' }}>No output yet. Load a model to see logs here.</span>
-                : logLines.map((line, i) => <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{renderLogLine(line)}</div>)
-              }
-            </div>
-          </Card>
-        )}
-      </Stack>
-
-      {/* ── Right sidebar ── */}
-      {isAdmin && (
-        <Stack w={320} style={{ flexShrink: 0, position: 'sticky', top: 16 }}>
-          <Card withBorder p={0} className="loadSettingsCard">
-            <Stack gap="md">
-              <div className="loadSettingsIntro">
-                <Text fw={700} size="sm">Load Settings</Text>
-                {selectedModel ? <Text size="xs" c="dimmed">{selectedIsLoaded ? 'Editing' : 'Ready to load'} <Text span c="teal" fw={700}>{selectedModel.name}</Text>. {selectedIsLoaded ? 'Applying changes ejects and reloads this model.' : 'Choose settings first, then load it.'}</Text> : <Text size="xs" c="dimmed">Select a model to configure it before loading.</Text>}
-              </div>
-              <LoadSettingsSection title="Settings" open={settingsSectionOpen} onToggle={() => setSettingsSectionOpen(!settingsSectionOpen)}>
-                <NumberInput label="Temperature" min={0} max={2} step={0.1} decimalScale={2} value={loadSettings.temperature} onChange={(v) => setLoadSettings({ ...loadSettings, temperature: Number(v) || 0 })} disabled={loadControlsDisabled} />
-                <Slider min={0} max={2} step={0.05} value={loadSettings.temperature} onChange={(value) => setLoadSettings({ ...loadSettings, temperature: value })} disabled={loadControlsDisabled} />
-                <Checkbox labelPosition="right" label="Limit Response Length" checked={loadSettings.limit_response_length} onChange={(e) => setLoadSettings({ ...loadSettings, limit_response_length: e.currentTarget.checked })} disabled={loadControlsDisabled} />
-                {loadSettings.limit_response_length ? <NumberInput label="Max Tokens" min={1} max={131072} value={loadSettings.max_tokens ?? 2048} onChange={(v) => setLoadSettings({ ...loadSettings, max_tokens: Number(v) || 2048 })} disabled={loadControlsDisabled} /> : null}
-                <Select label="Context Overflow" data={[{ value: 'truncate_middle', label: 'Truncate Middle' }, { value: 'truncate_start', label: 'Truncate Start' }, { value: 'error', label: 'Error' }]} value={loadSettings.context_overflow} onChange={(value) => setLoadSettings({ ...loadSettings, context_overflow: value ?? 'truncate_middle' })} disabled={loadControlsDisabled} />
-                <TextInput label="Stop Strings" placeholder="Enter a string and press Enter" value={stopStringInput} disabled={loadControlsDisabled} onChange={(e) => setStopStringInput(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const value = stopStringInput.trim(); if (value && !loadSettings.stop_strings.includes(value)) { setLoadSettings({ ...loadSettings, stop_strings: [...loadSettings.stop_strings, value] }); setStopStringInput(''); } } }} />
-                {loadSettings.stop_strings.length > 0 ? <Group gap="xs">{loadSettings.stop_strings.map(stop => <Badge key={stop} variant="light" color="gray" style={{ cursor: 'pointer' }} onClick={() => setLoadSettings({ ...loadSettings, stop_strings: loadSettings.stop_strings.filter(item => item !== stop) })}>{stop} ×</Badge>)}</Group> : null}
-                <NumberInput label="Context Length" description={selectedModel?.context_length_max ? `Token window size (--ctx-size), max ${selectedModel.context_length_max.toLocaleString()}` : 'Token window size (--ctx-size). Max unknown; using safe fallback.'} min={512} max={contextLengthMax} step={512} value={contextLength} onChange={(v) => setClampedContextLength(Number(v))} disabled={loadControlsDisabled} />
-                <Slider className="contextLengthSlider" min={512} max={contextLengthMax} step={512} value={Math.min(contextLength, contextLengthMax)} onChange={setClampedContextLength} disabled={loadControlsDisabled} marks={[{ value: 512, label: '512' }, { value: contextLengthMax, label: contextLengthMax.toLocaleString() }]} />
-                <NumberInput label="CPU Threads" description="Threads for inference (--threads)" min={1} max={256} value={nThreads} onChange={(v) => setNThreads(v === '' ? '' : Number(v))} disabled={loadControlsDisabled} />
-                <Slider min={1} max={64} step={1} value={nThreads === '' ? 10 : Math.min(64, nThreads)} onChange={(value) => setNThreads(value)} disabled={loadControlsDisabled} />
-                <div>
-                  <TextInput
-                    label="Multimodal Projector (mmproj)"
-                    description="Path to the mmproj GGUF file required for vision input. Downloaded automatically for HuggingFace models."
-                    placeholder="/path/to/mmproj-model-f16.gguf"
-                    value={mmprojectPathInput}
-                    onChange={(e) => setMmprojPathInput(e.currentTarget.value)}
-                    disabled={!selectedModel}
+                {loadedModels.length > 0 ? (
+                  <Stack gap="sm">
+                    {loadedModels.map((loadedModel) => {
+                      const status = loadedByName.get(loadedModel.name);
+                      const selected = selectedLoadedName === loadedModel.name;
+                      const modelSettingsChanged = selected && settingsChanged;
+                      return (
+                        <Card key={loadedModel.name} withBorder p={0} className={selected ? 'loadedModelCard selected' : 'loadedModelCard'} onClick={() => { setSelectedModelId(loadedModel.id); setSelectedLoadedName(loadedModel.name); }}>
+                          {/* Status bar */}
+                          <Group justify="space-between" px="md" pt="xs" pb="xs" style={{ borderBottom: '1px solid var(--mantine-color-dark-5)' }}>
+                            <Group gap="xs">
+                              <Badge color="green" variant="light" size="sm">READY</Badge>
+                              {modelSettingsChanged && (
+                                <Badge color="orange" variant="light" size="sm">
+                                  <Group gap={4} wrap="nowrap"><Bi name="exclamation-triangle" />RELOAD NEEDED</Group>
+                                </Badge>
+                              )}
+                            </Group>
+                            <i className="bi bi-chevron-right" style={{ color: 'var(--muted)', fontSize: 12 }} />
+                          </Group>
+                          {/* Main row */}
+                          <Group justify="space-between" px="md" py="sm" wrap="nowrap">
+                            <Group gap="xs" style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                              <Badge variant="default" radius="sm" size="sm" style={{ flexShrink: 0 }}>llm</Badge>
+                              <Text className="mono" c="teal" fw={600} size="sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{loadedModel.name}</Text>
+                              <ActionIcon variant="subtle" size="sm" title="Open in Chat" style={{ flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); onOpenInChat?.(loadedModel.name); setPage?.('chat'); }}><Bi name="eye" /></ActionIcon>
+                              <ActionIcon variant="subtle" size="sm" title="Copy model name" style={{ flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(loadedModel.name); }}><Bi name="copy" /></ActionIcon>
+                              <Menu withinPortal position="bottom-start">
+                                <Menu.Target>
+                                  <Button size="xs" variant="default" style={{ flexShrink: 0 }} rightSection={<Bi name="chevron-down" />} onClick={e => e.stopPropagation()}>
+                                    {'<>'} cURL
+                                  </Button>
+                                </Menu.Target>
+                                <Menu.Dropdown onClick={e => e.stopPropagation()}>
+                                  <Menu.Label>Copy example request</Menu.Label>
+                                  <Menu.Item leftSection={<Bi name="clipboard" />} onClick={() => navigator.clipboard.writeText(chatCurlExample(loadedModel.name, host, port, 'v1'))}>
+                                    /v1/chat/completions
+                                  </Menu.Item>
+                                  <Menu.Item leftSection={<Bi name="clipboard" />} onClick={() => navigator.clipboard.writeText(chatCurlExample(loadedModel.name, host, port, 'api'))}>
+                                    /api/v1/chat (legacy)
+                                  </Menu.Item>
+                                </Menu.Dropdown>
+                              </Menu>
+                            </Group>
+                            <Group gap="md" style={{ flexShrink: 0 }}>
+                              <Text size="sm" c="dimmed">Size <Text span fw={700} c="white">{formatBytes(loadedModel.size_bytes)}</Text></Text>
+                              {status?.context_length ? <Text size="sm" c="dimmed">Context <Text span fw={700} c="white">{status.context_length.toLocaleString()}</Text></Text> : null}
+                              {isAdmin && <Button size="xs" color="red" variant="light" leftSection={<Bi name="eject" />} onClick={(event) => { event.stopPropagation(); void ejectModel(loadedModel.name); }}>Eject</Button>}
+                              {isAdmin && <Button size="xs" color="red" variant="light" loading={deletingModelId === loadedModel.id} disabled={deletingModelId !== null && deletingModelId !== loadedModel.id} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => requestDeleteModel(event, loadedModel)}>Delete</Button>}
+                            </Group>
+                          </Group>
+                        </Card>
+                      );
+                    })}
+                  </Stack>
+                ) : (
+                  <EmptyState
+                    title="No model loaded"
+                    description={isAdmin ? 'Click "Load Model" to pick a model and load it into RAM. Configure load parameters in the Models tab.' : 'No model is loaded yet. Ask an admin to load one before chatting.'}
                   />
-                  {mmprojectPathInput !== (selectedModel?.mmproj_path ?? '') && (
-                    <Button mt="xs" size="xs" loading={savingMmproj} onClick={() => void saveMmproj()}>Save projector path</Button>
-                  )}
-                  {selectedModel?.mmproj_path && mmprojectPathInput === selectedModel.mmproj_path && (
-                    <Text size="xs" c="teal" mt={4}>Projector loaded — vision input enabled.</Text>
-                  )}
-                </div>
-              </LoadSettingsSection>
-              <LoadSettingsSection title="Sampling" open={samplingSectionOpen} onToggle={() => setSamplingSectionOpen(!samplingSectionOpen)}>
-                <NumberInput label="Top K Sampling" min={0} max={1000} value={loadSettings.top_k ?? 40} onChange={(v) => setLoadSettings({ ...loadSettings, top_k: Number(v) || 0 })} disabled={loadControlsDisabled} />
-                <Checkbox labelPosition="right" label="Repeat Penalty" checked={loadSettings.repeat_penalty_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, repeat_penalty_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
-                <NumberInput min={0} max={4} step={0.05} decimalScale={2} value={loadSettings.repeat_penalty ?? 1.1} onChange={(v) => setLoadSettings({ ...loadSettings, repeat_penalty: Number(v) || 1.1 })} disabled={loadControlsDisabled || !loadSettings.repeat_penalty_enabled} />
-                <Checkbox labelPosition="right" label="Presence Penalty" checked={loadSettings.presence_penalty_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, presence_penalty_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
-                <NumberInput min={-2} max={2} step={0.05} decimalScale={2} value={loadSettings.presence_penalty ?? 0} onChange={(v) => setLoadSettings({ ...loadSettings, presence_penalty: Number(v) || 0 })} disabled={loadControlsDisabled || !loadSettings.presence_penalty_enabled} />
-                <Checkbox labelPosition="right" label="Top P Sampling" checked={loadSettings.top_p_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, top_p_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
-                <NumberInput min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.top_p ?? 0.95} onChange={(v) => setLoadSettings({ ...loadSettings, top_p: Number(v) || 0.95 })} disabled={loadControlsDisabled || !loadSettings.top_p_enabled} />
-                <Slider min={0} max={1} step={0.01} value={loadSettings.top_p ?? 0.95} onChange={(value) => setLoadSettings({ ...loadSettings, top_p: value })} disabled={loadControlsDisabled || !loadSettings.top_p_enabled} />
-                <Checkbox labelPosition="right" label="Min P Sampling" checked={loadSettings.min_p_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, min_p_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
-                <NumberInput min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.min_p ?? 0.05} onChange={(v) => setLoadSettings({ ...loadSettings, min_p: Number(v) || 0.05 })} disabled={loadControlsDisabled || !loadSettings.min_p_enabled} />
-                <Slider min={0} max={1} step={0.01} value={loadSettings.min_p ?? 0.05} onChange={(value) => setLoadSettings({ ...loadSettings, min_p: value })} disabled={loadControlsDisabled || !loadSettings.min_p_enabled} />
-              </LoadSettingsSection>
-              <Button className="loadSettingsAction" onClick={applySelectedModelSettings} disabled={!selectedModel || modelLoading || (selectedIsLoaded ? !settingsChanged : !selectedIsLoadable)} loading={modelLoading}>{selectedIsLoaded ? 'Apply settings' : 'Load model'}</Button>
-            </Stack>
-          </Card>
+                )}
+
+                {isAdmin && (
+                  <Card withBorder p={0} style={{ overflow: 'hidden' }}>
+                    <Group justify="space-between" px="md" py="xs" style={{ borderBottom: '1px solid var(--mantine-color-dark-4)' }}>
+                      <Text size="sm" fw={700}>Logs</Text>
+                      <Button size="xs" variant="subtle" color="dimmed" onClick={async () => { await invoke('clear_model_logs', { requesterRole: currentUser.role }); setLogLines([]); }}>Clear</Button>
+                    </Group>
+                    <div ref={logContainerRef} style={{ height: 400, overflowY: 'auto', background: 'var(--mantine-color-dark-9)', padding: '10px 14px', fontFamily: 'ui-monospace, monospace', fontSize: 12, lineHeight: 1.6 }}>
+                      {logLines.length === 0
+                        ? <span style={{ color: '#4b5563' }}>No output yet. Load a model to see logs here.</span>
+                        : logLines.map((line, i) => <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{renderLogLine(line)}</div>)
+                      }
+                    </div>
+                  </Card>
+                )}
+              </Stack>
+
+              {/* ── Right column: model settings panel ── */}
+              {isAdmin && selectedIsLoaded && (
+                <Box w={290} style={{ flexShrink: 0 }}>
+                  <Card withBorder p={0} style={{ overflow: 'hidden' }}>
+                    {/* Header */}
+                    <Box px="md" pt="sm" pb="xs" style={{ borderBottom: '1px solid var(--mantine-color-dark-4)', background: 'rgba(0,0,0,0.18)' }}>
+                      <Text size="xs" fw={800} c="dimmed" style={{ textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>Model Settings</Text>
+                      <Text size="sm" fw={600} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedLoadedStatus?.model_name ?? '—'}</Text>
+                    </Box>
+                    <Tabs defaultValue="load">
+                      <Tabs.List>
+                        <Tabs.Tab value="info" fz={12}>Info</Tabs.Tab>
+                        <Tabs.Tab value="load" fz={12}>Load</Tabs.Tab>
+                        <Tabs.Tab value="inference" fz={12}>Inference</Tabs.Tab>
+                      </Tabs.List>
+                      <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 360px)' }}>
+                        {/* Info */}
+                        <Tabs.Panel value="info" p="sm">
+                          <Stack gap={2}>
+                            {selectedModel && <>
+                              <InfoRow label="Size" value={formatBytes(selectedModel.size_bytes)} />
+                              <InfoRow label="Format" value={selectedModel.format ?? 'GGUF'} />
+                              {selectedModel.context_length_max ? <InfoRow label="Max Context" value={selectedModel.context_length_max.toLocaleString() + ' tokens'} /> : null}
+                              {selectedModel.hf_repo ? <InfoRow label="Source" value={selectedModel.hf_repo} /> : null}
+                              <InfoRow label="Status" value={selectedModel.status} />
+                            </>}
+                            {selectedLoadedStatus && <><Divider my={6} /><Text size="xs" c="dimmed" fw={700} style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10 }}>Runtime</Text>
+                              {selectedLoadedStatus.context_length ? <InfoRow label="Context" value={selectedLoadedStatus.context_length.toLocaleString()} /> : null}
+                              {selectedLoadedStatus.n_threads ? <InfoRow label="Threads" value={String(selectedLoadedStatus.n_threads)} /> : null}
+                              {selectedLoadedStatus.port ? <InfoRow label="Port" value={`:${selectedLoadedStatus.port}`} /> : null}
+                            </>}
+                          </Stack>
+                        </Tabs.Panel>
+                        {/* Load */}
+                        <Tabs.Panel value="load" p="sm">
+                          <Stack gap="sm">
+                            <Text size="xs" fw={800} c="dimmed" style={{ textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>Context</Text>
+                            <NumberInput size="xs" label="Context Length" description={selectedModel?.context_length_max ? `Up to ${selectedModel.context_length_max.toLocaleString()} tokens` : undefined} min={512} max={contextLengthMax} step={512} value={contextLength} onChange={(v) => setClampedContextLength(Number(v))} disabled={loadControlsDisabled} />
+                            <Slider size="xs" min={512} max={contextLengthMax} step={512} value={Math.min(contextLength, contextLengthMax)} onChange={setClampedContextLength} disabled={loadControlsDisabled} className="contextLengthSlider" marks={[{ value: 512, label: '512' }, { value: contextLengthMax, label: contextLengthMax.toLocaleString() }]} />
+                            <Text size="xs" fw={800} c="dimmed" mt="xs" style={{ textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>Threads</Text>
+                            <NumberInput size="xs" label="CPU Threads" description="Inference threads (--threads)" min={1} max={256} value={nThreads} onChange={(v) => setNThreads(v === '' ? '' : Number(v))} disabled={loadControlsDisabled} />
+                            <Slider size="xs" min={1} max={64} step={1} value={nThreads === '' ? 10 : Math.min(64, nThreads)} onChange={(value) => setNThreads(value)} disabled={loadControlsDisabled} />
+                            <Text size="xs" fw={800} c="dimmed" mt="xs" style={{ textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>Multimodal</Text>
+                            <TextInput size="xs" label="mmproj Path" placeholder="/path/to/mmproj.gguf" value={mmprojectPathInput} onChange={(e) => setMmprojPathInput(e.currentTarget.value)} disabled={!selectedModel} />
+                            {mmprojectPathInput !== (selectedModel?.mmproj_path ?? '') && (
+                              <Button size="xs" loading={savingMmproj} onClick={() => void saveMmproj()}>Save projector path</Button>
+                            )}
+                          </Stack>
+                        </Tabs.Panel>
+                        {/* Inference */}
+                        <Tabs.Panel value="inference" p="sm">
+                          <Stack gap="sm">
+                            <NumberInput size="xs" label="Temperature" min={0} max={2} step={0.1} decimalScale={2} value={loadSettings.temperature} onChange={(v) => setLoadSettings({ ...loadSettings, temperature: Number(v) || 0 })} disabled={loadControlsDisabled} />
+                            <Slider size="xs" min={0} max={2} step={0.05} value={loadSettings.temperature} onChange={(value) => setLoadSettings({ ...loadSettings, temperature: value })} disabled={loadControlsDisabled} />
+                            <Checkbox size="xs" labelPosition="right" label="Limit Response Length" checked={loadSettings.limit_response_length} onChange={(e) => setLoadSettings({ ...loadSettings, limit_response_length: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                            {loadSettings.limit_response_length ? <NumberInput size="xs" label="Max Tokens" min={1} max={131072} value={loadSettings.max_tokens ?? 2048} onChange={(v) => setLoadSettings({ ...loadSettings, max_tokens: Number(v) || 2048 })} disabled={loadControlsDisabled} /> : null}
+                            <Select size="xs" label="Context Overflow" data={[{ value: 'truncate_middle', label: 'Truncate Middle' }, { value: 'truncate_start', label: 'Truncate Start' }, { value: 'error', label: 'Error' }]} value={loadSettings.context_overflow} onChange={(value) => setLoadSettings({ ...loadSettings, context_overflow: value ?? 'truncate_middle' })} disabled={loadControlsDisabled} />
+                            <Divider label="Sampling" labelPosition="left" my={4} />
+                            <NumberInput size="xs" label="Top K" min={0} max={1000} value={loadSettings.top_k ?? 40} onChange={(v) => setLoadSettings({ ...loadSettings, top_k: Number(v) || 0 })} disabled={loadControlsDisabled} />
+                            <Checkbox size="xs" labelPosition="right" label="Repeat Penalty" checked={loadSettings.repeat_penalty_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, repeat_penalty_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                            {loadSettings.repeat_penalty_enabled ? <NumberInput size="xs" min={0} max={4} step={0.05} decimalScale={2} value={loadSettings.repeat_penalty ?? 1.1} onChange={(v) => setLoadSettings({ ...loadSettings, repeat_penalty: Number(v) || 1.1 })} disabled={loadControlsDisabled} /> : null}
+                            <Checkbox size="xs" labelPosition="right" label="Presence Penalty" checked={loadSettings.presence_penalty_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, presence_penalty_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                            {loadSettings.presence_penalty_enabled ? <NumberInput size="xs" min={-2} max={2} step={0.05} decimalScale={2} value={loadSettings.presence_penalty ?? 0} onChange={(v) => setLoadSettings({ ...loadSettings, presence_penalty: Number(v) || 0 })} disabled={loadControlsDisabled} /> : null}
+                            <Checkbox size="xs" labelPosition="right" label="Top P" checked={loadSettings.top_p_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, top_p_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                            {loadSettings.top_p_enabled ? <><NumberInput size="xs" min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.top_p ?? 0.95} onChange={(v) => setLoadSettings({ ...loadSettings, top_p: Number(v) || 0.95 })} disabled={loadControlsDisabled} /><Slider size="xs" min={0} max={1} step={0.01} value={loadSettings.top_p ?? 0.95} onChange={(value) => setLoadSettings({ ...loadSettings, top_p: value })} disabled={loadControlsDisabled} /></> : null}
+                            <Checkbox size="xs" labelPosition="right" label="Min P" checked={loadSettings.min_p_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, min_p_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                            {loadSettings.min_p_enabled ? <><NumberInput size="xs" min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.min_p ?? 0.05} onChange={(v) => setLoadSettings({ ...loadSettings, min_p: Number(v) || 0.05 })} disabled={loadControlsDisabled} /><Slider size="xs" min={0} max={1} step={0.01} value={loadSettings.min_p ?? 0.05} onChange={(value) => setLoadSettings({ ...loadSettings, min_p: value })} disabled={loadControlsDisabled} /></> : null}
+                          </Stack>
+                        </Tabs.Panel>
+                      </div>
+                    </Tabs>
+                    {/* Reload button */}
+                    {settingsChanged && (
+                      <Box p="xs" style={{ borderTop: '1px solid var(--mantine-color-dark-4)' }}>
+                        <Button fullWidth size="sm" color="orange" variant="filled" leftSection={<Bi name="arrow-repeat" />} onClick={applySelectedModelSettings} loading={modelLoading}>
+                          Reload to apply changes
+                        </Button>
+                      </Box>
+                    )}
+                  </Card>
+                </Box>
+              )}
+            </Group>
+          </Tabs.Panel>
+
+          {/* ── Models tab ── */}
+          <Tabs.Panel value="models" pt="md">
+            <Group align="flex-start" gap="md" wrap="nowrap" style={{ width: '100%' }}>
+              <Stack style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                <Group justify="space-between" align="center">
+                  <Title order={3}>Available Models</Title>
+                  <TableControls shown={modelsShown} onShownChange={(value) => { setModelsShown(value); setModelsPage(0); }} page={modelsPageData.page} totalPages={modelsPageData.totalPages} onPageChange={setModelsPage}>
+                    {isAdmin && <Button size="xs" variant="default" onClick={() => setImportOpen(true)}>↓ Import Model</Button>}
+                  </TableControls>
+                </Group>
+                <Card withBorder>
+                  <Table.ScrollContainer minWidth={600}>
+                    <Table highlightOnHover>
+                      <Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Type / Inputs</Table.Th><Table.Th>Status</Table.Th><Table.Th>Size</Table.Th>{isAdmin ? <Table.Th>Action</Table.Th> : null}</Table.Tr></Table.Thead>
+                      <Table.Tbody>
+                        {visibleModels.map(model => (
+                          <Table.Tr key={model.id} className={selectedModel?.id === model.id && !selectedLoadedName ? 'selectableModelRow selected' : 'selectableModelRow'} onClick={() => { setSelectedModelId(model.id); setSelectedLoadedName(null); }}>
+                            <Table.Td>{model.name}</Table.Td>
+                            <Table.Td><ModelTypeBadge model={model} /></Table.Td>
+                            <Table.Td><Badge color={loadedBaseIds.has(model.id) ? 'green' : 'gray'} variant={loadedBaseIds.has(model.id) ? 'light' : 'outline'}>{loadedBaseIds.has(model.id) ? 'loaded' : 'unloaded'}</Badge></Table.Td>
+                            <Table.Td>{formatBytes(model.size_bytes)}</Table.Td>
+                            {isAdmin ? <Table.Td><Button size="xs" color="red" variant="light" loading={deletingModelId === model.id} disabled={deletingModelId !== null && deletingModelId !== model.id} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => requestDeleteModel(event, model)}>Delete</Button></Table.Td> : null}
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </Table.ScrollContainer>
+                  {(data?.length ?? 0) === 0 ? <EmptyState title="No imported models" description={isAdmin ? 'Import a local GGUF file or download a compatible model from Hugging Face to get started.' : 'No models are available yet. Ask an admin to import or download one.'} compact /> : null}
+                </Card>
+              </Stack>
+
+              {isAdmin && (
+                <Stack w={320} style={{ flexShrink: 0 }}>
+                  <Card withBorder p={0} className="loadSettingsCard">
+                    <Stack gap="md">
+                      <div className="loadSettingsIntro">
+                        <Text fw={700} size="sm">Load Settings</Text>
+                        {selectedModel ? <Text size="xs" c="dimmed">{selectedIsLoaded ? 'Editing' : 'Ready to load'} <Text span c="teal" fw={700}>{selectedModel.name}</Text>. {selectedIsLoaded ? 'Applying changes ejects and reloads this model.' : 'Choose settings, then load via the Server tab or the button below.'}</Text> : <Text size="xs" c="dimmed">Select a model to configure it before loading.</Text>}
+                      </div>
+                      <LoadSettingsSection title="Settings" open={settingsSectionOpen} onToggle={() => setSettingsSectionOpen(!settingsSectionOpen)}>
+                        <NumberInput label="Temperature" min={0} max={2} step={0.1} decimalScale={2} value={loadSettings.temperature} onChange={(v) => setLoadSettings({ ...loadSettings, temperature: Number(v) || 0 })} disabled={loadControlsDisabled} />
+                        <Slider min={0} max={2} step={0.05} value={loadSettings.temperature} onChange={(value) => setLoadSettings({ ...loadSettings, temperature: value })} disabled={loadControlsDisabled} />
+                        <Checkbox labelPosition="right" label="Limit Response Length" checked={loadSettings.limit_response_length} onChange={(e) => setLoadSettings({ ...loadSettings, limit_response_length: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                        {loadSettings.limit_response_length ? <NumberInput label="Max Tokens" min={1} max={131072} value={loadSettings.max_tokens ?? 2048} onChange={(v) => setLoadSettings({ ...loadSettings, max_tokens: Number(v) || 2048 })} disabled={loadControlsDisabled} /> : null}
+                        <Select label="Context Overflow" data={[{ value: 'truncate_middle', label: 'Truncate Middle' }, { value: 'truncate_start', label: 'Truncate Start' }, { value: 'error', label: 'Error' }]} value={loadSettings.context_overflow} onChange={(value) => setLoadSettings({ ...loadSettings, context_overflow: value ?? 'truncate_middle' })} disabled={loadControlsDisabled} />
+                        <TextInput label="Stop Strings" placeholder="Enter a string and press Enter" value={stopStringInput} disabled={loadControlsDisabled} onChange={(e) => setStopStringInput(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const value = stopStringInput.trim(); if (value && !loadSettings.stop_strings.includes(value)) { setLoadSettings({ ...loadSettings, stop_strings: [...loadSettings.stop_strings, value] }); setStopStringInput(''); } } }} />
+                        {loadSettings.stop_strings.length > 0 ? <Group gap="xs">{loadSettings.stop_strings.map(stop => <Badge key={stop} variant="light" color="gray" style={{ cursor: 'pointer' }} onClick={() => setLoadSettings({ ...loadSettings, stop_strings: loadSettings.stop_strings.filter(item => item !== stop) })}>{stop} ×</Badge>)}</Group> : null}
+                        <NumberInput label="Context Length" description={selectedModel?.context_length_max ? `Token window size (--ctx-size), max ${selectedModel.context_length_max.toLocaleString()}` : 'Token window size (--ctx-size). Max unknown; using safe fallback.'} min={512} max={contextLengthMax} step={512} value={contextLength} onChange={(v) => setClampedContextLength(Number(v))} disabled={loadControlsDisabled} />
+                        <Slider className="contextLengthSlider" min={512} max={contextLengthMax} step={512} value={Math.min(contextLength, contextLengthMax)} onChange={setClampedContextLength} disabled={loadControlsDisabled} marks={[{ value: 512, label: '512' }, { value: contextLengthMax, label: contextLengthMax.toLocaleString() }]} />
+                        <NumberInput label="CPU Threads" description="Threads for inference (--threads)" min={1} max={256} value={nThreads} onChange={(v) => setNThreads(v === '' ? '' : Number(v))} disabled={loadControlsDisabled} />
+                        <Slider min={1} max={64} step={1} value={nThreads === '' ? 10 : Math.min(64, nThreads)} onChange={(value) => setNThreads(value)} disabled={loadControlsDisabled} />
+                        <div>
+                          <TextInput
+                            label="Multimodal Projector (mmproj)"
+                            description="Path to the mmproj GGUF file required for vision input. Downloaded automatically for HuggingFace models."
+                            placeholder="/path/to/mmproj-model-f16.gguf"
+                            value={mmprojectPathInput}
+                            onChange={(e) => setMmprojPathInput(e.currentTarget.value)}
+                            disabled={!selectedModel}
+                          />
+                          {mmprojectPathInput !== (selectedModel?.mmproj_path ?? '') && (
+                            <Button mt="xs" size="xs" loading={savingMmproj} onClick={() => void saveMmproj()}>Save projector path</Button>
+                          )}
+                          {selectedModel?.mmproj_path && mmprojectPathInput === selectedModel.mmproj_path && (
+                            <Text size="xs" c="teal" mt={4}>Projector loaded — vision input enabled.</Text>
+                          )}
+                        </div>
+                      </LoadSettingsSection>
+                      <LoadSettingsSection title="Sampling" open={samplingSectionOpen} onToggle={() => setSamplingSectionOpen(!samplingSectionOpen)}>
+                        <NumberInput label="Top K Sampling" min={0} max={1000} value={loadSettings.top_k ?? 40} onChange={(v) => setLoadSettings({ ...loadSettings, top_k: Number(v) || 0 })} disabled={loadControlsDisabled} />
+                        <Checkbox labelPosition="right" label="Repeat Penalty" checked={loadSettings.repeat_penalty_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, repeat_penalty_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                        <NumberInput min={0} max={4} step={0.05} decimalScale={2} value={loadSettings.repeat_penalty ?? 1.1} onChange={(v) => setLoadSettings({ ...loadSettings, repeat_penalty: Number(v) || 1.1 })} disabled={loadControlsDisabled || !loadSettings.repeat_penalty_enabled} />
+                        <Checkbox labelPosition="right" label="Presence Penalty" checked={loadSettings.presence_penalty_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, presence_penalty_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                        <NumberInput min={-2} max={2} step={0.05} decimalScale={2} value={loadSettings.presence_penalty ?? 0} onChange={(v) => setLoadSettings({ ...loadSettings, presence_penalty: Number(v) || 0 })} disabled={loadControlsDisabled || !loadSettings.presence_penalty_enabled} />
+                        <Checkbox labelPosition="right" label="Top P Sampling" checked={loadSettings.top_p_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, top_p_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                        <NumberInput min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.top_p ?? 0.95} onChange={(v) => setLoadSettings({ ...loadSettings, top_p: Number(v) || 0.95 })} disabled={loadControlsDisabled || !loadSettings.top_p_enabled} />
+                        <Slider min={0} max={1} step={0.01} value={loadSettings.top_p ?? 0.95} onChange={(value) => setLoadSettings({ ...loadSettings, top_p: value })} disabled={loadControlsDisabled || !loadSettings.top_p_enabled} />
+                        <Checkbox labelPosition="right" label="Min P Sampling" checked={loadSettings.min_p_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, min_p_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
+                        <NumberInput min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.min_p ?? 0.05} onChange={(v) => setLoadSettings({ ...loadSettings, min_p: Number(v) || 0.05 })} disabled={loadControlsDisabled || !loadSettings.min_p_enabled} />
+                        <Slider min={0} max={1} step={0.01} value={loadSettings.min_p ?? 0.05} onChange={(value) => setLoadSettings({ ...loadSettings, min_p: value })} disabled={loadControlsDisabled || !loadSettings.min_p_enabled} />
+                      </LoadSettingsSection>
+                      <Button className="loadSettingsAction" onClick={applySelectedModelSettings} disabled={!selectedModel || modelLoading || (selectedIsLoaded ? !settingsChanged : !selectedIsLoadable)} loading={modelLoading}>{selectedIsLoaded ? 'Apply settings' : 'Load model'}</Button>
+                    </Stack>
+                  </Card>
+                </Stack>
+              )}
+            </Group>
+          </Tabs.Panel>
+        </Tabs>
+
+      {/* ── Load Model modal ── */}
+      <Modal opened={loadModelOpen} onClose={() => { setLoadModelOpen(false); setLoadModelSearch(''); }} title="Load Model" size="md">
+        <Stack gap="sm">
+          <TextInput
+            placeholder="Type to filter models..."
+            value={loadModelSearch}
+            onChange={e => setLoadModelSearch(e.currentTarget.value)}
+            autoFocus
+            rightSection={loadModelSearch ? <ActionIcon variant="subtle" size="sm" onClick={() => setLoadModelSearch('')}><Bi name="x-lg" /></ActionIcon> : null}
+          />
+          {loadableModels.length === 0 ? (
+            <EmptyState title="No models available" description="Go to the Models tab to import or download models." compact />
+          ) : (
+            <div className="loadModelPickerList">
+              {filteredPickerModels.length === 0 ? (
+                <Text c="dimmed" size="sm" ta="center" py="md">No models match your search.</Text>
+              ) : filteredPickerModels.map(model => {
+                const isLoaded = loadedBaseIds.has(model.id);
+                return (
+                  <button key={model.id} type="button" className="loadModelPickerItem" onClick={() => void loadSpecificModel(model)} disabled={modelLoading}>
+                    <div className="loadModelPickerInfo">
+                      <Text fw={600} size="sm">{model.name}</Text>
+                      <Group gap="xs" mt={2}>
+                        <ModelTypeBadge model={model} />
+                        {isLoaded && <Badge color="green" variant="light" size="xs">loaded</Badge>}
+                      </Group>
+                    </div>
+                    <Group gap="sm" style={{ flexShrink: 0 }}>
+                      <Text size="xs" c="dimmed">{formatBytes(model.size_bytes)}</Text>
+                      <Badge variant="outline" size="sm" color="blue">{model.format ?? 'GGUF'}</Badge>
+                    </Group>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </Stack>
-      )}
+      </Modal>
 
       {/* ── Import Model modal ── */}
       <Modal opened={importOpen} onClose={() => setImportOpen(false)} title="Import Model" size="95vw" classNames={{ content: 'importModelModalContent', header: 'importModelModalHeader', title: 'importModelModalTitle', body: 'importModelModalBody' }}>
-        <Stack>
-          <Text c="dimmed" size="sm">Provide the full path to a GGUF file on this machine. LLMeter will copy it into the managed model store.</Text>
-          <Text c="dimmed" size="xs">Store: <Text span className="mono">{modelStore.data ?? 'Loading...'}</Text></Text>
-          <Group gap="sm">
-            <TextInput placeholder="/models/example.gguf" value={importPath} onChange={e => setImportPath(e.currentTarget.value)} style={{ flex: 1 }} />
-            <Button onClick={importModel} disabled={!importPath.trim()}>Import</Button>
-          </Group>
+        <Tabs defaultValue="download">
+          <Tabs.List mb="md">
+            <Tabs.Tab value="download">↓ Download from Hugging Face</Tabs.Tab>
+            <Tabs.Tab value="import">Import Local File</Tabs.Tab>
+          </Tabs.List>
+
+          <Tabs.Panel value="import">
+            <Stack>
+              <Text c="dimmed" size="sm">Provide the full path to a GGUF file on this machine. LLMeter will copy it into the managed model store.</Text>
+              <Text c="dimmed" size="xs">Store: <Text span className="mono">{modelStore.data ?? 'Loading...'}</Text></Text>
+              <Group gap="sm">
+                <TextInput placeholder="/models/example.gguf" value={importPath} onChange={e => setImportPath(e.currentTarget.value)} style={{ flex: 1 }} />
+                <Button onClick={importModel} disabled={!importPath.trim()}>Import</Button>
+              </Group>
+            </Stack>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="download">
           <Card withBorder className="hfModelBrowser">
             <div className="hfBrowserGrid">
               {/* ── Sidebar ── */}
@@ -946,14 +1285,27 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                         <Text fw={800} mb="xs">Download Options</Text>
                         {selectedHfFiles.length > 0 ? (
                           <Stack gap="sm">
-                            {/* File selector */}
-                            <Select
-                              data={selectedHfFiles.map(f => ({ value: f.key, label: f.label + (f.size ? `  ·  ${formatBytes(f.size)}` : '') }))}
-                              value={activeFile?.key ?? selectedHfFiles[0]?.key ?? null}
-                              onChange={(key) => setSelectedHfFileKey(key)}
-                              allowDeselect={false}
-                              className="hfFileSelect"
-                            />
+                            {/* File selector — with RAM compatibility icons */}
+                            <div className="hfFileOptionList">
+                              {selectedHfFiles.map(f => {
+                                const isActive = (activeFile?.key ?? selectedHfFiles[0]?.key) === f.key;
+                                const compat = getCompatibility(f.size, systemMemory.data);
+                                return (
+                                  <button
+                                    key={f.key}
+                                    type="button"
+                                    className={`hfFileOption${isActive ? ' active' : ''}`}
+                                    onClick={() => setSelectedHfFileKey(f.key)}
+                                  >
+                                    <span className="hfFileOptionLabel">{f.label}</span>
+                                    <span className="hfFileOptionMeta">
+                                      {f.size ? <span className="hfFileOptionSize">{formatBytes(f.size)}</span> : null}
+                                      <CompatIcon compat={compat} size={f.size} />
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
                             {/* Progress */}
                             {(activeProgress || mmprojectProgress) ? (
                               <Stack gap="xs">
@@ -990,9 +1342,9 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                               <Text size="xs" c="dimmed">Vision model: mmproj projector will be downloaded automatically.</Text>
                             )}
                             {/* Download / Delete row */}
-                            <Group justify="space-between" align="center">
-                              {activeFile && activeFile.files.length > 1 && <Text size="xs" c="dimmed">{activeFile.files.length} parts</Text>}
-                              <Group gap="xs" ml="auto">
+                            <Stack gap="xs">
+                              {activeFile && activeFile.files.length > 1 && <Text size="xs" c="dimmed">{activeFile.files.length} parts · split download</Text>}
+                              <Group gap="xs" style={{ width: '100%' }}>
                                 {activeIsDownloaded ? (
                                   <Button color="red" variant="light" size="sm" loading={hfDownloading === activeDeleteId} disabled={Boolean(hfDownloading) && hfDownloading !== activeDeleteId} onClick={() => deleteDownloadedHuggingFaceModel(activeDownloadedModels, activeFile?.label ?? '')}>Delete</Button>
                                 ) : null}
@@ -1002,13 +1354,14 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                                   size="md"
                                   loading={hfDownloading === activeDownloadId}
                                   disabled={activeIsDownloaded || Boolean(hfDownloading) || !activeFile}
-                                  onClick={() => activeFile && downloadHuggingFaceModel(activeDownloadFiles, activeFile.label)}
+                                  onClick={() => activeFile && downloadHuggingFaceModel(activeDownloadFiles, activeFile.label, activeFile.size)}
                                   className="hfDownloadBtn"
+                                  style={{ flex: 1 }}
                                 >
                                   {activeIsDownloaded ? '✓ Downloaded' : `↓ Download${activeFile?.size ? `  ${formatBytes(activeFile.size)}` : ''}`}
                                 </Button>
                               </Group>
-                            </Group>
+                            </Stack>
                           </Stack>
                         ) : (
                           <Stack gap="sm">
@@ -1051,7 +1404,8 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
               </Stack>
             </div>
           </Card>
-        </Stack>
+          </Tabs.Panel>
+        </Tabs>
       </Modal>
 
       {/* ── Server Settings modal ── */}
@@ -1080,6 +1434,112 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
           <Button onClick={() => navigator.clipboard.writeText(mcpConfig)}>Copy to clipboard</Button>
         </Stack>
       </Modal>
-    </Group>
+
+      {/* ── Downloads panel ── */}
+      {downloadsOpen && (
+        <div className="downloadsPanel">
+          {/* Header */}
+          <div className="downloadsPanelHeader">
+            <Text fw={700} size="sm">Downloads</Text>
+            <Group gap="xs">
+              <ActionIcon variant="subtle" size="sm" title="Close" onClick={() => setDownloadsOpen(false)}><Bi name="x-lg" /></ActionIcon>
+            </Group>
+          </div>
+          {/* Filter */}
+          <div className="downloadsPanelFilter">
+            <TextInput
+              size="xs"
+              placeholder="Filter downloads..."
+              value={downloadsFilter}
+              onChange={e => setDownloadsFilter(e.currentTarget.value)}
+              rightSection={downloadsFilter ? <ActionIcon variant="subtle" size="xs" onClick={() => setDownloadsFilter('')}><Bi name="x" /></ActionIcon> : null}
+            />
+          </div>
+          {/* List */}
+          <div className="downloadsPanelList">
+            {(() => {
+              const all = Array.from(downloads.values()).filter(d => !downloadsFilter || d.label.toLowerCase().includes(downloadsFilter.toLowerCase())).reverse();
+              const active = all.filter(d => d.status === 'downloading');
+              const completed = all.filter(d => d.status !== 'downloading');
+              if (all.length === 0) return (
+                <div className="downloadsPanelEmpty">
+                  <i className="bi bi-cloud-arrow-down" style={{ fontSize: 28, opacity: 0.3 }} />
+                  <Text size="sm" c="dimmed">No downloads yet</Text>
+                </div>
+              );
+              return (
+                <>
+                  {active.length > 0 && (
+                    <>
+                      <div className="downloadsPanelSection">Downloading</div>
+                      {active.map(d => <DownloadItem key={d.id} entry={d} onCancel={() => void cancelDownload(d.id)} />)}
+                    </>
+                  )}
+                  {completed.length > 0 && (
+                    <>
+                      <div className="downloadsPanelSection">
+                        <span>Completed</span>
+                        <button className="downloadsClearBtn" onClick={() => setDownloads(prev => { const next = new Map(prev); for (const [k, v] of next) if (v.status !== 'downloading') next.delete(k); return next; })}>Clear</button>
+                      </div>
+                      {completed.map(d => <DownloadItem key={d.id} entry={d} />)}
+                    </>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+          {/* Footer */}
+          <button className="downloadsPanelFooter" onClick={async () => { try { await invoke('open_external_url', { url: `file://${modelStore.data ?? ''}` }); } catch {} }}>
+            Open model folder <Bi name="arrow-up-right" />
+          </button>
+        </div>
+      )}
+
+      {/* Floating downloads button */}
+      {downloads.size > 0 && !downloadsOpen && (
+        <button className="downloadsFloatBtn" onClick={() => setDownloadsOpen(true)} title="Downloads">
+          {Array.from(downloads.values()).some(d => d.status === 'downloading') ? (
+            <span className="downloadsFloatSpinner"><Bi name="cloud-arrow-down" /></span>
+          ) : (
+            <Bi name="cloud-arrow-down" />
+          )}
+          {Array.from(downloads.values()).filter(d => d.status === 'downloading').length > 0 && (
+            <span className="downloadsFloatBadge">{Array.from(downloads.values()).filter(d => d.status === 'downloading').length}</span>
+          )}
+        </button>
+      )}
+    </Stack>
+  );
+}
+
+function DownloadItem({ entry, onCancel }: { entry: DownloadEntry; onCancel?: () => void }) {
+  const pct = entry.totalBytes && entry.totalBytes > 0 ? Math.min(100, Math.round((entry.downloadedBytes / entry.totalBytes) * 100)) : null;
+  const statusColor = entry.status === 'done' ? '#4ade80' : entry.status === 'error' ? '#f87171' : entry.status === 'cancelled' ? '#6b7280' : '#60a5fa';
+  return (
+    <div className="downloadItem">
+      <div className="downloadItemIcon">
+        <i className={`bi bi-${entry.status === 'done' ? 'check-circle-fill' : entry.status === 'error' ? 'x-circle-fill' : entry.status === 'cancelled' ? 'slash-circle' : 'cloud-arrow-down'}`} style={{ color: statusColor, fontSize: 18 }} />
+      </div>
+      <div className="downloadItemBody">
+        <Text size="xs" fw={600} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.label}</Text>
+        <Group gap="xs" align="center">
+          <Text size="xs" c="dimmed">
+            {entry.status === 'downloading'
+              ? `${formatBytes(entry.downloadedBytes)}${entry.totalBytes ? ` / ${formatBytes(entry.totalBytes)}` : ''}${entry.partTotal > 1 ? ` · part ${entry.partIndex}/${entry.partTotal}` : ''}`
+              : entry.status === 'done' ? (entry.sizeBytes ? formatBytes(entry.sizeBytes) : 'Done')
+              : entry.status === 'cancelled' ? 'Cancelled'
+              : 'Failed'}
+          </Text>
+        </Group>
+        {entry.status === 'downloading' && (
+          <Progress value={pct ?? 100} size="xs" color="blue" animated={pct === null} striped={pct === null} mt={3} />
+        )}
+      </div>
+      {entry.status === 'downloading' && onCancel && (
+        <button className="downloadItemCancel" onClick={onCancel} title="Cancel download">
+          <Bi name="x-lg" />
+        </button>
+      )}
+    </div>
   );
 }

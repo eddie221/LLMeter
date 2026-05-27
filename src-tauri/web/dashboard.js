@@ -1,4 +1,7 @@
 let mode = 'login';
+// In-memory session — cleared on every page load/reload.
+let webSessionKey = null;
+let webSessionUser = null;
 const auth = document.querySelector('#auth');
 const dashboard = document.querySelector('#dashboard');
 const authTitle = document.querySelector('#authTitle');
@@ -36,9 +39,11 @@ const chatState = { groups: [], sessions: [], sessionsByGroup: {}, activeGroupId
 const dateRangeState = { baseMonth: firstOfMonth(addMonths(new Date(), -1)), start: '', end: '' };
 const MAX_CHAT_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 
-document.querySelector('#logout').addEventListener('click', () => {
-  localStorage.removeItem('llmeter_web_api_key');
-  localStorage.removeItem('llmeter_web_user');
+document.querySelector('#logout').addEventListener('click', async () => {
+  try { await postAuthJson('/web/logout', {}); } catch {}
+  webSessionKey = null;
+  webSessionUser = null;
+  mode = 'login';
   showAuth();
 });
 document.querySelector('#refresh').addEventListener('click', refreshAll);
@@ -71,7 +76,7 @@ document.querySelector('#adminKeysShown').addEventListener('change', event => { 
 document.querySelector('#adminKeysPrev').addEventListener('click', () => { adminState.keysPage = Math.max(0, adminState.keysPage - 1); renderAdminKeys(); });
 document.querySelector('#adminKeysNext').addEventListener('click', () => { adminState.keysPage += 1; renderAdminKeys(); });
 document.querySelector('#newChatGroup').addEventListener('click', createChatGroup);
-document.querySelector('#newChatSession').addEventListener('click', createChatSession);
+document.querySelector('#newChatSession').addEventListener('click', () => createChatSession());
 document.querySelector('#chatSearch').addEventListener('input', event => { chatState.search = event.target.value; renderChatGroups(); renderChatSessions(); });
 document.querySelector('#chatSortToggle').addEventListener('click', () => { const menu = document.querySelector('#chatSortMenu'); menu.hidden = !menu.hidden; });
 document.querySelectorAll('[data-chat-sort]').forEach(button => button.addEventListener('click', () => { chatState.sortBy = button.dataset.chatSort; renderChatGroups(); renderChatSessions(); }));
@@ -98,7 +103,7 @@ chatPanel.addEventListener('drop', event => {
   chatPanel.classList.remove('draggingFiles');
   addChatAttachments(event.dataTransfer.files);
 });
-document.querySelector('#chatInput').addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) sendChatMessage(); });
+document.querySelector('#chatInput').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChatMessage(); } });
 document.querySelector('#chatSystemPrompt').addEventListener('change', saveActiveChatSession);
 document.querySelector('#chatModel').addEventListener('change', saveActiveChatSession);
 document.querySelector('#closeLogModal').addEventListener('click', closeLogModal);
@@ -116,11 +121,6 @@ async function init() {
   try {
     const setup = await getJson('/web/setup-state', false);
     mode = setup.needs_setup ? 'setup' : 'login';
-    if (!setup.needs_setup && localStorage.getItem('llmeter_web_api_key')) {
-      showDashboard();
-      await refreshAll();
-      return;
-    }
     showAuth();
   } catch (error) {
     showAuthError(error.message);
@@ -142,7 +142,7 @@ function showAuth() {
 }
 
 function showDashboard() {
-  const user = JSON.parse(localStorage.getItem('llmeter_web_user') || 'null');
+  const user = webSessionUser;
   document.querySelector('#signedIn').textContent = user ? user.display_name : '';
   document.querySelector('#adminBadge').hidden = user?.role !== 'admin';
   document.querySelector('#adminTab').hidden = user?.role !== 'admin';
@@ -295,8 +295,8 @@ async function submitAuth() {
       ? { username: username.value.trim(), display_name: displayName.value.trim(), password: password.value }
       : { username: username.value.trim(), password: password.value };
     const result = await postJson(path, body);
-    localStorage.setItem('llmeter_web_api_key', result.api_key);
-    localStorage.setItem('llmeter_web_user', JSON.stringify(result.user));
+    webSessionKey = result.api_key;
+    webSessionUser = result.user;
     mode = 'login';
     showDashboard();
     await refreshAll();
@@ -306,28 +306,47 @@ async function submitAuth() {
 }
 
 function authHeaders() {
-  return { Authorization: `Bearer ${localStorage.getItem('llmeter_web_api_key') || ''}` };
+  return webSessionKey ? { Authorization: `Bearer ${webSessionKey}` } : {};
+}
+
+async function parseResponse(response) {
+  const text = await response.text();
+  try { return JSON.parse(text); } catch { return text || null; }
+}
+
+function extractErrorMessage(data, fallback) {
+  return (typeof data === 'object' && data?.error?.message) || (typeof data === 'string' && data) || fallback;
 }
 
 async function getJson(path, withAuth = true) {
   const response = await fetch(path, { headers: withAuth ? authHeaders() : {} });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error?.message || response.statusText);
+  const body = await parseResponse(response);
+  if (response.status === 401 && withAuth) { sessionExpired(); return; }
+  if (!response.ok) throw new Error(extractErrorMessage(body, response.statusText));
   return body;
 }
 
 async function postJson(path, body) {
   const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || response.statusText);
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(extractErrorMessage(data, response.statusText));
   return data;
 }
 
 async function postAuthJson(path, body) {
   const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || response.statusText);
+  const data = await parseResponse(response);
+  if (response.status === 401) { sessionExpired(); return; }
+  if (!response.ok) throw new Error(extractErrorMessage(data, response.statusText));
   return data;
+}
+
+function sessionExpired() {
+  webSessionKey = null;
+  webSessionUser = null;
+  mode = 'login';
+  showAuth();
+  showAuthError('Your session has expired. Please log in again.');
 }
 
 async function refreshAll() {
@@ -362,7 +381,7 @@ async function refreshAll() {
 async function refreshProfile() {
   errorBox.hidden = true;
   try {
-    const user = JSON.parse(localStorage.getItem('llmeter_web_user') || 'null');
+    const user = webSessionUser;
     document.querySelector('#profileRole').textContent = user?.role || '-';
     document.querySelector('#profileUid').textContent = user?.uid || '-';
     document.querySelector('#profileUsernameInput').value = user?.username || '';
@@ -375,6 +394,7 @@ async function refreshProfile() {
     errorBox.hidden = false;
   }
 }
+
 
 async function refreshServer() {
   errorBox.hidden = true;
@@ -439,8 +459,8 @@ function visibleChatSessions(items) {
   const needle = chatState.search.trim().toLowerCase();
   const filtered = needle ? items.filter(session => String(session.title || '').toLowerCase().includes(needle)) : items;
   return [...filtered].sort((a, b) => {
-    const valueA = chatState.sortBy === 'created' ? (a.createdAt || a.created_at || 0) : chatState.sortBy === 'tokens' ? chatSessionTokenEstimate(a) : (a.updatedAt || a.updated_at || 0);
-    const valueB = chatState.sortBy === 'created' ? (b.createdAt || b.created_at || 0) : chatState.sortBy === 'tokens' ? chatSessionTokenEstimate(b) : (b.updatedAt || b.updated_at || 0);
+    const valueA = chatState.sortBy === 'created' ? (a.createdAt || 0) : chatState.sortBy === 'tokens' ? chatSessionTokenEstimate(a) : (a.updatedAt || 0);
+    const valueB = chatState.sortBy === 'created' ? (b.createdAt || 0) : chatState.sortBy === 'tokens' ? chatSessionTokenEstimate(b) : (b.updatedAt || 0);
     return chatState.sortDirection === 'asc' ? valueA - valueB : valueB - valueA;
   });
 }
@@ -495,7 +515,7 @@ function renderChatGroups() {
 
 function chatSessionButton(session, groupId) {
   const active = session.id === chatState.activeSessionId && groupId === chatState.activeGroupId;
-  const meta = chatState.showTokenCount ? `${chatSessionTokenEstimate(session).toLocaleString()} tok` : relativeAge(session.updatedAt || session.updated_at || 0);
+  const meta = chatState.showTokenCount ? `${chatSessionTokenEstimate(session).toLocaleString()} tok` : relativeAge(session.updatedAt || 0);
   return `<button class="${active ? 'active' : ''}" data-chat-group-id="${escapeHtml(groupId)}" data-chat-session="${escapeHtml(session.id)}"><span>${escapeHtml(session.title || 'Untitled')}</span><small>${escapeHtml(meta)}</small></button>`;
 }
 
@@ -531,7 +551,7 @@ function renderActiveChatSession() {
   const session = activeChatSession();
   const fallbackModel = chatState.loadedModels[0]?.model_name || '';
   document.querySelector('#chatTitle').value = session?.title || '';
-  document.querySelector('#chatSystemPrompt').value = session?.systemPrompt || session?.system_prompt || '';
+  document.querySelector('#chatSystemPrompt').value = session?.systemPrompt || '';
   if (session && (!session.model || !chatState.loadedModels.some(item => item.model_name === session.model))) {
     session.model = fallbackModel;
     if (fallbackModel) saveChatSession(session).catch(error => console.warn(error));
@@ -543,18 +563,42 @@ function renderActiveChatSession() {
   renderChatMessages(session?.messages || []);
 }
 
-function renderChatMessages(messages) {
+function renderChatMessages(messages, isGenerating = false) {
   const root = document.querySelector('#chatMessages');
-  root.innerHTML = messages.length
-    ? messages.map(message => `<div class="chatBubble ${escapeHtml(message.role)}"><div class="chatBubbleMeta"><strong>${escapeHtml(message.role)}</strong><time>${message.role === 'user' ? 'Request' : 'Response'}: ${escapeHtml(formatChatTime(message.timestamp))}</time></div><p>${escapeHtml(displayChatContent(message.content))}</p></div>`).join('')
-    : '<p class="muted">Create or select a chat session to start.</p>';
+  if (!messages.length && !isGenerating) {
+    root.innerHTML = '<p class="muted" style="margin:auto;text-align:center;opacity:.5">Create or select a chat session to start.</p>';
+    return;
+  }
+  root.innerHTML = messages.map(message => {
+    const isUser = message.role === 'user';
+    const time = escapeHtml(formatChatTime(message.timestamp));
+    if (isUser) {
+      // Use _display hint when available: show only the typed text + image thumbnails
+      if (message._display) {
+        const text = message._display.text ? `<span>${escapeHtml(message._display.text)}</span>` : '';
+        const thumbs = (message._display.images || []).map(img =>
+          `<img class="chatMsgThumb" src="${img.url}" alt="${escapeHtml(img.name)}" title="${escapeHtml(img.name)}" />`
+        ).join('');
+        const thumbsHtml = thumbs ? `<div class="chatMsgThumbs">${thumbs}</div>` : '';
+        return `<div class="appChatMsgRow user"><div class="appChatMsgTime">${time}</div><div class="appChatUserBubble">${text}${thumbsHtml}</div></div>`;
+      }
+      const content = escapeHtml(displayChatContent(typeof message.content === 'string' ? message.content : JSON.stringify(message.content)));
+      return `<div class="appChatMsgRow user"><div class="appChatMsgTime">${time}</div><div class="appChatUserBubble">${content}</div></div>`;
+    } else {
+      const content = escapeHtml(displayChatContent(typeof message.content === 'string' ? message.content : JSON.stringify(message.content)));
+      return `<div class="appChatMsgRow assistant"><div class="appChatAsstModelLabel">${escapeHtml(message.model || 'assistant')}</div><div class="appChatAsstContent">${content}</div><div class="appChatMsgTime" style="margin-top:4px">${time}</div></div>`;
+    }
+  }).join('');
+  if (isGenerating) {
+    root.insertAdjacentHTML('beforeend', '<div class="appChatMsgRow assistant"><div class="appChatAsstModelLabel">Generating…</div><div class="chatTypingDots"><span></span><span></span><span></span></div></div>');
+  }
   root.scrollTop = root.scrollHeight;
 }
 
 function renderChatAttachments() {
   const tray = document.querySelector('#chatAttachmentTray');
   tray.hidden = chatState.pendingAttachments.length === 0;
-  tray.innerHTML = chatState.pendingAttachments.map(attachment => `<span class="chatAttachmentChip">${escapeHtml(attachment.name)} · ${formatBytes(attachment.size)} <button data-remove-attachment="${escapeHtml(attachment.id)}"><i class="bi bi-x-lg"></i></button></span>`).join('');
+  tray.innerHTML = chatState.pendingAttachments.map(attachment => `<span class="chatAttachmentChip"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px">${escapeHtml(attachment.name)}</span><span style="color:var(--muted);font-size:11px">${formatBytes(attachment.size)}</span><button data-remove-attachment="${escapeHtml(attachment.id)}" style="font-size:11px"><i class="bi bi-x-lg"></i></button></span>`).join('');
   tray.querySelectorAll('[data-remove-attachment]').forEach(button => button.addEventListener('click', () => {
     chatState.pendingAttachments = chatState.pendingAttachments.filter(attachment => attachment.id !== button.dataset.removeAttachment);
     renderChatAttachments();
@@ -690,13 +734,23 @@ async function sendChatMessage() {
   const attachmentsAtSend = [...chatState.pendingAttachments];
   const attachmentText = attachmentContext(attachmentsAtSend);
   const userContent = [input, attachmentText].filter(Boolean).join('\n\n');
-  session.messages.push({ role: 'user', content: userContent, timestamp: Date.now() });
+  session.messages.push({
+    role: 'user',
+    content: userContent,
+    _display: {
+      text: input,
+      images: attachmentsAtSend
+        .filter(a => a.kind === 'image')
+        .map(a => ({ name: a.name, url: a.content })),
+    },
+    timestamp: Date.now(),
+  });
   session.updatedAt = Date.now();
   chatState.sessionsByGroup[chatState.activeGroupId] = chatState.sessions;
   document.querySelector('#chatInput').value = '';
   chatState.pendingAttachments = [];
   renderChatAttachments();
-  renderChatMessages(session.messages);
+  renderChatMessages(session.messages, true);
   try {
     const requestMessages = normalizeChatRequestMessages([
       ...session.messages.slice(0, -1).map(message => ({ role: message.role, content: message.content })),
@@ -840,8 +894,7 @@ function serverSetting(label, value) {
 function renderServerModels(items) {
   const root = document.querySelector('#serverModels');
   const loaded = items.filter(item => item.loaded);
-  const user = JSON.parse(localStorage.getItem('llmeter_web_user') || 'null');
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = webSessionUser?.role === 'admin';
   if (!loaded.length) {
     root.innerHTML = '<div class="emptyState compact"><strong>No model loaded</strong><p>Load a model from the desktop app or CLI, then refresh this page to see its active settings.</p></div>';
     return;
@@ -851,7 +904,7 @@ function renderServerModels(items) {
     return `<div class="serverModelCard">
       <div class="serverModelHeader">
         <div class="serverModelName">${escapeHtml(item.model_name || 'unknown')}</div>
-        <div class="topbar"><span class="roleBadge user">Loaded</span>${isAdmin && item.model_id ? `<button class="dangerButton" data-delete-server-model="${item.model_id}" data-model-name="${escapeHtml(item.model_name || 'unknown')}">Delete</button>` : ''}</div>
+        <div class="topbar"><span class="roleBadge user">Loaded</span></div>
       </div>
       <div class="serverSettingGrid">
         ${serverSetting('Context length', item.context_length)}
@@ -892,7 +945,7 @@ async function saveProfile() {
       password: document.querySelector('#profilePasswordInput').value || null,
     };
     const user = await postAuthJson('/web/profile', payload);
-    localStorage.setItem('llmeter_web_user', JSON.stringify(user));
+    webSessionUser = user;
     document.querySelector('#signedIn').textContent = user.display_name;
     document.querySelector('#profileRole').textContent = user.role;
     document.querySelector('#profileUid').textContent = user.uid || '-';
@@ -1029,7 +1082,7 @@ async function adminDeleteKey(keyId) {
 function renderModels(items) {
   const root = document.querySelector('#models');
   if (!items.length) { root.innerHTML = '<tr><td colspan="6" class="muted">No model usage yet.</td></tr>'; return; }
-  root.innerHTML = items.map(item => `<tr><td><code>${escapeHtml(item.model)}</code></td><td><span class="adminBadge" style="color:#8ce99a">Local</span></td><td>${item.requests.toLocaleString()}</td><td>${(item.input_tokens || 0).toLocaleString()}</td><td>${(item.output_tokens || 0).toLocaleString()}</td><td>${((item.input_tokens || 0) + (item.output_tokens || 0)).toLocaleString()}</td></tr>`).join('');
+  root.innerHTML = items.map(item => `<tr><td><code>${escapeHtml(item.model)}</code></td><td><span class="localBadge">Local</span></td><td>${item.requests.toLocaleString()}</td><td>${(item.input_tokens || 0).toLocaleString()}</td><td>${(item.output_tokens || 0).toLocaleString()}</td><td>${((item.input_tokens || 0) + (item.output_tokens || 0)).toLocaleString()}</td></tr>`).join('');
 }
 
 function downloadOverviewCsv() {

@@ -28,6 +28,8 @@ pub struct AppState {
     session_store_dir: PathBuf,
     hf_cache_dir: PathBuf,
     python_env_dir: PathBuf,
+    /// Download IDs that have been requested to cancel.
+    cancelled_downloads: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     // Keeps the async log-file writer alive for the lifetime of the app.
     _log_guard: tracing_appender::non_blocking::WorkerGuard,
 }
@@ -41,6 +43,15 @@ struct ChatAttachmentFile {
     size: u64,
     kind: String,
     content: String,
+}
+
+fn truncate_log(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max).collect::<String>())
+    }
 }
 
 fn require_admin(requester_role: &str) -> Result<(), String> {
@@ -110,8 +121,10 @@ fn sanitize_model_file_name(file_name: &str) -> Result<String, String> {
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     let parsed = reqwest::Url::parse(&url).map_err(|err| format!("Invalid URL: {err}"))?;
-    if parsed.scheme() != "https" || parsed.host_str() != Some("huggingface.co") {
-        return Err("Only Hugging Face links can be opened from this view.".into());
+    let allowed = (parsed.scheme() == "https" && parsed.host_str() == Some("huggingface.co"))
+        || parsed.scheme() == "file";
+    if !allowed {
+        return Err("Only Hugging Face links and local file paths can be opened from this view.".into());
     }
     #[cfg(target_os = "macos")]
     let status = Command::new("open").arg(parsed.as_str()).status();
@@ -529,7 +542,11 @@ fn read_chat_attachment(path: String) -> Result<ChatAttachmentFile, String> {
 }
 
 #[tauri::command]
-#[tracing::instrument(skip_all)]
+fn scan_model_store(state: State<'_, AppState>) -> Result<(), String> {
+    state.db.scan_model_store()
+}
+
+#[tauri::command]
 async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelRecord>, String> {
     let loaded_ids = state.runtime.loaded_model_ids().await;
     let mut models = state.db.list_models()?;
@@ -679,11 +696,6 @@ async fn download_model(
         return Err("Only GGUF model downloads are supported.".into());
     }
 
-    let model_dir = state.db.model_store_dir();
-    fs::create_dir_all(&model_dir).map_err(|err| err.to_string())?;
-    let destination = unique_download_path(&model_dir, &safe_name);
-    let partial = destination.with_extension("gguf.part");
-
     // Extract owner/repo from https://huggingface.co/{owner}/{repo}/resolve/...
     let hf_repo = {
         let segments: Vec<&str> = parsed
@@ -696,6 +708,20 @@ async fn download_model(
             None
         }
     };
+
+    // Store in a per-repo subfolder when the HF repo is known.
+    let model_dir = if let Some(repo) = &hf_repo {
+        let mut p = state.db.model_store_dir();
+        for segment in repo.split('/') {
+            p = p.join(segment);
+        }
+        p
+    } else {
+        state.db.model_store_dir()
+    };
+    fs::create_dir_all(&model_dir).map_err(|err| err.to_string())?;
+    let destination = unique_download_path(&model_dir, &safe_name);
+    let partial = destination.with_extension("gguf.part");
 
     let client = reqwest::Client::new();
     let meta = if let Some(repo) = &hf_repo {
@@ -749,6 +775,13 @@ async fn download_model(
         .await
         .map_err(|err| format!("Model download interrupted: {err}"))?
     {
+        // Check for user-requested cancellation on every chunk.
+        if state.cancelled_downloads.lock().unwrap().remove(&download_id) {
+            drop(file);
+            let _ = fs::remove_file(&partial);
+            let _ = emit_progress("cancelled", downloaded_bytes, total_bytes);
+            return Err("Download cancelled.".into());
+        }
         file.write_all(&chunk)
             .map_err(|err| format!("Unable to write model download: {err}"))?;
         downloaded_bytes += chunk.len() as u64;
@@ -764,9 +797,22 @@ async fn download_model(
     // Download mmproj projector for vision models if present in the same HF repo.
     let mmproj_stored_path: Option<String> =
         if let (Some(repo), Some(mmproj_file)) = (&hf_repo, &mmproj_hf_filename) {
-            let mmproj_url = format!("https://huggingface.co/{repo}/resolve/main/{mmproj_file}");
             let safe_mmproj =
                 sanitize_model_file_name(mmproj_file).unwrap_or_else(|_| "mmproj.gguf".into());
+
+            // Skip download if mmproj already exists in the model subfolder.
+            let existing_mmproj = fs::read_dir(&model_dir).ok().and_then(|entries| {
+                entries.filter_map(|e| e.ok()).find(|e| {
+                    let n = e.file_name().to_string_lossy().to_ascii_lowercase();
+                    n.contains("mmproj") && n.ends_with(".gguf")
+                })
+            });
+            if let Some(existing) = existing_mmproj {
+                tracing::info!("mmproj already exists at {:?}, skipping download", existing.path());
+                Some(existing.path().to_string_lossy().to_string())
+            } else {
+
+            let mmproj_url = format!("https://huggingface.co/{repo}/resolve/main/{mmproj_file}");
             let mmproj_dest = unique_download_path(&model_dir, &safe_mmproj);
             let mmproj_partial = mmproj_dest.with_extension("gguf.part");
             let emit_mmproj = |status: &str, dl: u64, total: Option<u64>| -> Result<(), String> {
@@ -814,6 +860,7 @@ async fn download_model(
                 }
                 _ => None,
             }
+            } // end else (mmproj not already present)
         } else {
             None
         };
@@ -1427,6 +1474,7 @@ async fn chat(
     user_id: i64,
 ) -> Result<serde_json::Value, String> {
     tracing::info!("chat request started");
+    let num_messages = messages.len();
     let input_text = messages
         .iter()
         .map(|message| format!("{}: {}", message.role, message.content.to_log_text()))
@@ -1444,9 +1492,17 @@ async fn chat(
         presence_penalty: params.as_ref().and_then(|p| p.presence_penalty),
         stop: params.as_ref().and_then(|p| p.stop.clone()),
     };
+    state.runtime.push_log(format!(
+        "> chat  model=\"{}\"  messages={}  input=\"{}\"",
+        model,
+        num_messages,
+        truncate_log(&input_text, 120)
+    )).await;
+
     let result = match crate::inference::run_chat(&state.db, &state.runtime, request).await {
         Ok(result) => result,
         Err(err) => {
+            state.runtime.push_log(format!("< 400 ERROR  {}", truncate_log(&err, 160))).await;
             let _ = state.db.add_log(&RequestLogRecord {
                 id: 0,
                 user_id,
@@ -1471,6 +1527,14 @@ async fn chat(
         .choices
         .first()
         .and_then(|c| c.finish_reason.clone());
+    state.runtime.push_log(format!(
+        "< 200 OK  in={} out={} total={}  {}ms  {:.1} tok/s",
+        result.input_tokens,
+        result.output_tokens,
+        result.input_tokens + result.output_tokens,
+        result.time_ms,
+        if result.time_ms > 0 { result.output_tokens as f64 * 1000.0 / result.time_ms as f64 } else { 0.0 }
+    )).await;
     let _ = state.db.add_log(&RequestLogRecord {
         id: 0,
         user_id,
@@ -1514,6 +1578,26 @@ fn dashboard(
     state
         .db
         .dashboard(requester_user_id, requester_role, scope, start_ts, end_ts)
+}
+
+#[tauri::command]
+fn get_system_memory() -> serde_json::Value {
+    use sysinfo::System;
+    let mut sys = System::new();
+    sys.refresh_memory();
+    serde_json::json!({
+        "total_bytes": sys.total_memory(),
+        "available_bytes": sys.available_memory(),
+    })
+}
+
+#[tauri::command]
+async fn cancel_download(
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<(), String> {
+    state.cancelled_downloads.lock().unwrap().insert(download_id);
+    Ok(())
 }
 
 pub fn run_cli(args: &[String]) -> i32 {
@@ -1574,6 +1658,7 @@ pub fn run() {
                 session_store_dir,
                 hf_cache_dir,
                 python_env_dir,
+                cancelled_downloads: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
                 _log_guard: log_guard,
             });
             tauri::async_runtime::spawn(async move {
@@ -1598,6 +1683,7 @@ pub fn run() {
             login,
             read_chat_attachment,
             open_external_url,
+            scan_model_store,
             list_models,
             import_model,
             delete_model,
@@ -1634,7 +1720,9 @@ pub fn run() {
             delete_api_key,
             list_logs,
             dashboard,
-            chat
+            chat,
+            get_system_memory,
+            cancel_download
         ])
         .run(tauri::generate_context!())
         .expect("error while running LLMeter");

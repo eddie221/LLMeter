@@ -171,7 +171,7 @@ export function displayChatContent(content: string) {
   return content.replace(/data:[^\s;]+\/[^\s;]+;base64,[A-Za-z0-9+/=]+/g, '[base64 attachment data hidden in chat view]');
 }
 
-export function ChatPage({ currentUser }: { currentUser: UserAccount }) {
+export function ChatPage({ currentUser, requestedModel }: { currentUser: UserAccount; requestedModel?: string }) {
   const isAdmin = currentUser.role === 'admin';
   const loadedStatus = useAsyncData<LoadedModelStatus[]>(() => invoke('loaded_model_status'), []);
   useEffect(() => {
@@ -209,6 +209,7 @@ export function ChatPage({ currentUser }: { currentUser: UserAccount }) {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [selectedModel, setSelectedModel] = useState('');
+  useEffect(() => { if (requestedModel) setSelectedModel(requestedModel); }, [requestedModel]);
   const [inferParams, setInferParams] = useState<InferenceParams>({});
   const [thinkEnabled, setThinkEnabled] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);

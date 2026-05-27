@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "LLMeter",
-        "width": 1280,
-        "height": 820,
+        "width": 1960,
+        "height": 1080,
         "minWidth": 1080,
         "minHeight": 720,
         "dragDropEnabled": true

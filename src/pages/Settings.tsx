@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import {
+  ActionIcon,
   Button,
   Card,
   Group,
@@ -9,12 +10,36 @@ import {
   Switch,
   Text,
   TextInput,
+  Tooltip,
 } from '@mantine/core';
 import { useEffect, useState } from 'react';
 
 import type { AppStorageDirs, ServerStatus, SettingsRecord, UserAccount } from '../types';
+import { Bi } from '../components/Bi';
 import { ErrorCard, Header } from '../components/common';
 import { useAsyncData } from '../hooks/useAsyncData';
+
+/** Opens a path in the system file manager. For file paths, opens the parent folder. */
+function openInFinder(path: string) {
+  if (!path) return;
+  // If the path looks like a file (has an extension after the last separator), open parent dir.
+  const lastSep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  const lastName = path.slice(lastSep + 1);
+  const isFile = lastName.includes('.');
+  const target = isFile ? path.slice(0, lastSep) || path : path;
+  void invoke('open_external_url', { url: `file://${target}` });
+}
+
+function OpenFolderButton({ path }: { path: string | null | undefined }) {
+  if (!path) return null;
+  return (
+    <Tooltip label="Reveal in Finder" withArrow>
+      <ActionIcon variant="default" size="lg" onClick={() => openInFinder(path)}>
+        <Bi name="folder2-open" />
+      </ActionIcon>
+    </Tooltip>
+  );
+}
 
 export function SettingsPanel({ currentUser, onSaved }: { currentUser: UserAccount; onSaved?: () => void | Promise<void> }) {
   const { data, error, reload } = useAsyncData<SettingsRecord>(() => invoke('get_settings', { requesterRole: currentUser.role }), [currentUser.role]);
@@ -66,8 +91,14 @@ export function SettingsPanel({ currentUser, onSaved }: { currentUser: UserAccou
           <Card withBorder className="settingsSection">
             <Text className="settingsSectionLabel">Inference</Text>
             <TextInput label="Default model" value={settings.default_model ?? ''} onChange={(e) => updateSettings({ ...settings, default_model: e.currentTarget.value || null })} />
-            <TextInput label="llama-server executable override" description="Optional. Leave blank to use the bundled llama-server shipped with LLMeter." placeholder="Bundled llama-server" value={settings.llama_cpp_path ?? ''} onChange={(e) => updateSettings({ ...settings, llama_cpp_path: e.currentTarget.value || null })} />
-            <TextInput label="HF to GGUF converter script" description="Path to llama.cpp convert_hf_to_gguf.py for automatic Hugging Face conversion." placeholder="/path/to/llama.cpp/convert_hf_to_gguf.py" value={settings.hf_convert_script_path ?? ''} onChange={(e) => updateSettings({ ...settings, hf_convert_script_path: e.currentTarget.value || null })} />
+            <Group gap="xs" align="flex-end">
+              <TextInput style={{ flex: 1 }} label="llama-server executable override" description="Optional. Leave blank to use the bundled llama-server shipped with LLMeter." placeholder="Bundled llama-server" value={settings.llama_cpp_path ?? ''} onChange={(e) => updateSettings({ ...settings, llama_cpp_path: e.currentTarget.value || null })} />
+              <OpenFolderButton path={settings.llama_cpp_path} />
+            </Group>
+            <Group gap="xs" align="flex-end">
+              <TextInput style={{ flex: 1 }} label="HF to GGUF converter script" description="Path to llama.cpp convert_hf_to_gguf.py for automatic Hugging Face conversion." placeholder="/path/to/llama.cpp/convert_hf_to_gguf.py" value={settings.hf_convert_script_path ?? ''} onChange={(e) => updateSettings({ ...settings, hf_convert_script_path: e.currentTarget.value || null })} />
+              <OpenFolderButton path={settings.hf_convert_script_path} />
+            </Group>
           </Card>
           <Card withBorder className="settingsSection">
             <Text className="settingsSectionLabel">Access</Text>
@@ -122,7 +153,16 @@ export function ApplicationSettingsPage({ currentUser }: { currentUser: UserAcco
               </div>
               <Group gap="xs" wrap="nowrap" className="storagePathValue">
                 <TextInput readOnly value={row.value} className="mono" />
-                <Button variant="light" onClick={() => copyPath(row.label, row.value)}>Copy</Button>
+                <Tooltip label="Copy path" withArrow>
+                  <ActionIcon variant="light" size="lg" onClick={() => copyPath(row.label, row.value)}>
+                    <Bi name={copied === row.label ? 'check-lg' : 'clipboard'} />
+                  </ActionIcon>
+                </Tooltip>
+                <Tooltip label="Reveal in Finder" withArrow>
+                  <ActionIcon variant="default" size="lg" onClick={() => openInFinder(row.value)}>
+                    <Bi name="folder2-open" />
+                  </ActionIcon>
+                </Tooltip>
               </Group>
             </div>
           )) : <Text c="dimmed">Loading storage settings...</Text>}

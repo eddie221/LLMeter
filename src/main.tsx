@@ -77,8 +77,9 @@ function App() {
 }
 
 function Shell({ currentUser, page, setPage, onLogout, onUpdateUser }: { currentUser: UserAccount; page: Page; setPage: (page: Page) => void; onLogout: () => void; onUpdateUser: (u: UserAccount) => void }) {
-  const mainNavPages: Page[] = ['chat', 'models', 'dashboard', 'logs', ...(currentUser.role === 'admin' ? ['admin' as Page] : [])];
+  const mainNavPages: Page[] = ['dashboard', 'models', 'chat', 'logs', ...(currentUser.role === 'admin' ? ['admin' as Page] : [])];
   const [collapsed, setCollapsed] = useState(false);
+  const [chatModel, setChatModel] = useState<string | undefined>(undefined);
   const serverStatus = useAsyncData<ServerStatus>(
     () => invoke('get_public_server_status'),
     [],
@@ -134,10 +135,14 @@ function Shell({ currentUser, page, setPage, onLogout, onUpdateUser }: { current
       <div className="appMain">
         {/* Chat stays mounted so its state persists when switching tabs */}
         <div className={page === 'chat' ? 'fullPageWrapper' : 'fullPageWrapper hidden'}>
-          <ChatPage currentUser={currentUser} />
+          <ChatPage currentUser={currentUser} requestedModel={chatModel} />
         </div>
-        {/* Models/Logs/Admin fill full height with internal scroll */}
-        {(page === 'models' || page === 'logs' || page === 'admin') && (
+        {/* Models stays mounted so downloads persist when switching tabs */}
+        <div className={page === 'models' ? 'scrollPageWrapper' : 'scrollPageWrapper hidden'}>
+          <ModelsPage currentUser={currentUser} serverStatus={serverStatus.data} setServerStatus={serverStatus.setData} reloadServerStatus={serverStatus.reload} setPage={setPage} onOpenInChat={(name) => { setChatModel(name); setPage('chat'); }} />
+        </div>
+        {/* Logs/Admin fill full height with internal scroll */}
+        {(page === 'logs' || page === 'admin') && (
           <div className="scrollPageWrapper">
             <PageView page={page} currentUser={currentUser} setPage={setPage} onUpdateUser={onUpdateUser} serverStatus={serverStatus.data} setServerStatus={serverStatus.setData} reloadServerStatus={serverStatus.reload} />
           </div>
@@ -154,7 +159,6 @@ function Shell({ currentUser, page, setPage, onLogout, onUpdateUser }: { current
 }
 
 function PageView({ page, currentUser, setPage, onUpdateUser, serverStatus, setServerStatus, reloadServerStatus }: { page: Page; currentUser: UserAccount; setPage: (p: Page) => void; onUpdateUser: (u: UserAccount) => void; serverStatus: ServerStatus | null; setServerStatus: React.Dispatch<React.SetStateAction<ServerStatus | null>>; reloadServerStatus: () => Promise<void> }) {
-  if (page === 'models') return <ModelsPage currentUser={currentUser} serverStatus={serverStatus} setServerStatus={setServerStatus} reloadServerStatus={reloadServerStatus} />;
   if (page === 'logs') return <LogsPage currentUser={currentUser} />;
   if (page === 'admin') return currentUser.role === 'admin' ? <AdminPage currentUser={currentUser} /> : <ErrorCard message="Admin access required." />;
   if (page === 'profile') return <ProfilePage currentUser={currentUser} onUpdateUser={onUpdateUser} />;
