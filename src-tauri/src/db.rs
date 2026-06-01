@@ -844,6 +844,8 @@ impl Db {
         scope: Option<String>,
         start_ts: Option<i64>,
         end_ts: Option<i64>,
+        filter_user_id: Option<i64>,
+        filter_model: Option<String>,
     ) -> Result<DashboardSummary, String> {
         let include_all_users = requester_role == "admin" && scope.as_deref() != Some("mine");
         let conn = self.connect()?;
@@ -853,12 +855,16 @@ impl Db {
              FROM request_logs
              WHERE (?1 = 1 OR user_id = ?2)
                AND (?3 IS NULL OR created_at >= ?3)
-               AND (?4 IS NULL OR created_at <= ?4)",
+               AND (?4 IS NULL OR created_at <= ?4)
+               AND (?5 IS NULL OR user_id = ?5)
+               AND (?6 IS NULL OR COALESCE(model, 'unknown') = ?6)",
                 params![
                     bool_i64(include_all_users),
                     requester_user_id,
                     start_ts,
-                    end_ts
+                    end_ts,
+                    filter_user_id,
+                    filter_model,
                 ],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
@@ -873,6 +879,8 @@ impl Db {
              WHERE (?1 = 1 OR user_id = ?2)
                AND (?3 IS NULL OR created_at >= ?3)
                AND (?4 IS NULL OR created_at <= ?4)
+               AND (?5 IS NULL OR user_id = ?5)
+               AND (?6 IS NULL OR COALESCE(model, 'unknown') = ?6)
              GROUP BY model_name ORDER BY COUNT(*) DESC LIMIT 12",
             )
             .map_err(|err| err.to_string())?;
@@ -882,7 +890,9 @@ impl Db {
                     bool_i64(include_all_users),
                     requester_user_id,
                     start_ts,
-                    end_ts
+                    end_ts,
+                    filter_user_id,
+                    filter_model,
                 ],
                 |row| {
                     Ok(ModelUsage {
@@ -905,6 +915,8 @@ impl Db {
              WHERE (?1 = 1 OR user_id = ?2)
                AND (?3 IS NULL OR created_at >= ?3)
                AND (?4 IS NULL OR created_at <= ?4)
+               AND (?5 IS NULL OR user_id = ?5)
+               AND (?6 IS NULL OR COALESCE(model, 'unknown') = ?6)
              GROUP BY day ORDER BY day ASC",
             )
             .map_err(|err| err.to_string())?;
@@ -914,7 +926,9 @@ impl Db {
                     bool_i64(include_all_users),
                     requester_user_id,
                     start_ts,
-                    end_ts
+                    end_ts,
+                    filter_user_id,
+                    filter_model,
                 ],
                 |row| {
                     Ok(TokenUsagePoint {
@@ -936,6 +950,8 @@ impl Db {
              WHERE (?1 = 1 OR user_id = ?2)
                AND (?3 IS NULL OR created_at >= ?3)
                AND (?4 IS NULL OR created_at <= ?4)
+               AND (?5 IS NULL OR user_id = ?5)
+               AND (?6 IS NULL OR COALESCE(model, 'unknown') = ?6)
              GROUP BY day, model_name ORDER BY day ASC, model_name ASC",
             )
             .map_err(|err| err.to_string())?;
@@ -945,7 +961,9 @@ impl Db {
                     bool_i64(include_all_users),
                     requester_user_id,
                     start_ts,
-                    end_ts
+                    end_ts,
+                    filter_user_id,
+                    filter_model,
                 ],
                 |row| {
                     Ok(ModelDailyUsagePoint {

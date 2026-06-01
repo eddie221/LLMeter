@@ -482,6 +482,8 @@ async fn web_dashboard_data(
         query.scope,
         query.start_ts,
         query.end_ts,
+        None,
+        None,
     ) {
         Ok(summary) => Json(summary).into_response(),
         Err(err) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &err),

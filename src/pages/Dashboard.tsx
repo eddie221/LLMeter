@@ -5,6 +5,7 @@ import {
   Card,
   Group,
   Modal,
+  Select,
   SimpleGrid,
   Stack,
   Table,
@@ -286,7 +287,13 @@ export function DashboardPage({ currentUser }: { currentUser: UserAccount }) {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [hiddenChartModels, setHiddenChartModels] = useState<string[]>([]);
+  const [filterUserId, setFilterUserId] = useState<string | null>(null);
+  const [filterModel, setFilterModel] = useState<string | null>(null);
   const { startTs, endTs } = getTimeWindow(timeRange, customStart, customEnd);
+  const { data: users } = useAsyncData<UserAccount[]>(
+    () => currentUser.role === 'admin' ? invoke('list_users', { requesterRole: currentUser.role }) : Promise.resolve([]),
+    [currentUser.role],
+  );
   const { data, error, reload } = useAsyncData<DashboardSummary>(
     () => invoke('dashboard', {
       requesterUserId: currentUser.id,
@@ -294,8 +301,10 @@ export function DashboardPage({ currentUser }: { currentUser: UserAccount }) {
       scope,
       startTs,
       endTs,
+      filterUserId: filterUserId ? Number(filterUserId) : null,
+      filterModel: filterModel || null,
     }),
-    [currentUser.id, currentUser.role, scope, startTs, endTs],
+    [currentUser.id, currentUser.role, scope, startTs, endTs, filterUserId, filterModel],
   );
   const displayDailyUsage = useMemo(
     () => fillDailyUsageRange(data?.daily_usage ?? [], startTs, endTs),
@@ -339,6 +348,24 @@ export function DashboardPage({ currentUser }: { currentUser: UserAccount }) {
     <Group className="filterRail">
       {currentUser.role === 'admin' ? <Button size="sm" className={scope === 'all' ? 'filterChip active' : 'filterChip'} onClick={() => setScope('all')}>All users</Button> : null}
       <Button size="sm" className={scope === 'mine' ? 'filterChip active' : 'filterChip'} onClick={() => setScope('mine')}>Mine</Button>
+      {currentUser.role === 'admin' && scope === 'all' ? (
+        <Select
+          size="sm"
+          placeholder="All users"
+          clearable
+          data={(users ?? []).map(u => ({ value: String(u.id), label: u.display_name || u.username }))}
+          value={filterUserId}
+          onChange={setFilterUserId}
+        />
+      ) : null}
+      <Select
+        size="sm"
+        placeholder="All models"
+        clearable
+        data={Array.from(new Set(data?.model_usage?.map(m => m.model) ?? [])).map(m => ({ value: m, label: m }))}
+        value={filterModel}
+        onChange={setFilterModel}
+      />
       <span className="railDivider" />
       <Button size="sm" className={timeRange === 'all' ? 'filterChip active' : 'filterChip'} onClick={() => selectRange('all')}>All time</Button>
       <Button size="sm" className={timeRange === 'today' ? 'filterChip active' : 'filterChip'} onClick={() => selectRange('today')}>Today</Button>

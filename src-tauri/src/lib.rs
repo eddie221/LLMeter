@@ -1574,10 +1574,12 @@ fn dashboard(
     scope: Option<String>,
     start_ts: Option<i64>,
     end_ts: Option<i64>,
+    filter_user_id: Option<i64>,
+    filter_model: Option<String>,
 ) -> Result<DashboardSummary, String> {
     state
         .db
-        .dashboard(requester_user_id, requester_role, scope, start_ts, end_ts)
+        .dashboard(requester_user_id, requester_role, scope, start_ts, end_ts, filter_user_id, filter_model)
 }
 
 #[tauri::command]
