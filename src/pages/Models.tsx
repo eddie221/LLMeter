@@ -340,6 +340,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
   const [modelsShown, setModelsShown] = useState('25');
   const [modelsPage, setModelsPage] = useState(0);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const userScrolledUp = useRef(false);
 
   const isRunning = serverStatus?.state === 'running';
   const host = serverStatus?.host === '0.0.0.0' ? 'localhost' : (serverStatus?.host ?? '127.0.0.1');
@@ -759,12 +760,11 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
     return () => clearInterval(id);
   }, [isAdmin, currentUser.role]);
 
-  // Auto-scroll within the log container only when already near the bottom
+  // Auto-scroll only when the user has not manually scrolled up
   useEffect(() => {
     const el = logContainerRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
+    if (!el || userScrolledUp.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [logLines]);
 
   // Auto-select the first loaded model so the settings panel is visible without a manual click
@@ -882,7 +882,6 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                               <Text size="sm" c="dimmed">Size <Text span fw={700} c="white">{formatBytes(loadedModel.size_bytes)}</Text></Text>
                               {status?.context_length ? <Text size="sm" c="dimmed">Context <Text span fw={700} c="white">{status.context_length.toLocaleString()}</Text></Text> : null}
                               {isAdmin && <Button size="xs" color="red" variant="light" leftSection={<Bi name="eject" />} onClick={(event) => { event.stopPropagation(); void ejectModel(loadedModel.name); }}>Eject</Button>}
-                              {isAdmin && <Button size="xs" color="red" variant="light" loading={deletingModelId === loadedModel.id} disabled={deletingModelId !== null && deletingModelId !== loadedModel.id} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => requestDeleteModel(event, loadedModel)}>Delete</Button>}
                             </Group>
                           </Group>
                         </Card>
@@ -902,7 +901,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                       <Text size="sm" fw={700}>Logs</Text>
                       <Button size="xs" variant="subtle" color="dimmed" onClick={async () => { await invoke('clear_model_logs', { requesterRole: currentUser.role }); setLogLines([]); }}>Clear</Button>
                     </Group>
-                    <div ref={logContainerRef} style={{ height: 400, overflowY: 'auto', background: 'var(--mantine-color-dark-9)', padding: '10px 14px', fontFamily: 'ui-monospace, monospace', fontSize: 12, lineHeight: 1.6 }}>
+                    <div ref={logContainerRef} onScroll={() => { const el = logContainerRef.current; if (el) userScrolledUp.current = el.scrollHeight - el.scrollTop - el.clientHeight > 10; }} style={{ height: 400, overflowY: 'auto', background: 'var(--mantine-color-dark-9)', padding: '10px 14px', fontFamily: 'ui-monospace, monospace', fontSize: 12, lineHeight: 1.6 }}>
                       {logLines.length === 0
                         ? <span style={{ color: '#4b5563' }}>No output yet. Load a model to see logs here.</span>
                         : logLines.map((line, i) => <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{renderLogLine(line)}</div>)
@@ -949,7 +948,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                         <Tabs.Panel value="load" p="sm">
                           <Stack gap="sm">
                             <Text size="xs" fw={800} c="dimmed" style={{ textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>Context</Text>
-                            <NumberInput size="xs" label="Context Length" description={selectedModel?.context_length_max ? `Up to ${selectedModel.context_length_max.toLocaleString()} tokens` : undefined} min={512} max={contextLengthMax} step={512} value={contextLength} onChange={(v) => setClampedContextLength(Number(v))} disabled={loadControlsDisabled} />
+                            <NumberInput size="xs" label="Context Length" description={selectedModel?.context_length_max ? `Up to ${selectedModel.context_length_max.toLocaleString()} tokens` : undefined} min={512} max={contextLengthMax} value={contextLength} onChange={(v) => typeof v === 'number' && setContextLength(v)} onBlur={() => setClampedContextLength(contextLength)} disabled={loadControlsDisabled} />
                             <Slider size="xs" min={512} max={contextLengthMax} step={512} value={Math.min(contextLength, contextLengthMax)} onChange={setClampedContextLength} disabled={loadControlsDisabled} className="contextLengthSlider" marks={[{ value: 512, label: '512' }, { value: contextLengthMax, label: contextLengthMax.toLocaleString() }]} />
                             <Text size="xs" fw={800} c="dimmed" mt="xs" style={{ textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>Threads</Text>
                             <NumberInput size="xs" label="CPU Threads" description="Inference threads (--threads)" min={1} max={256} value={nThreads} onChange={(v) => setNThreads(v === '' ? '' : Number(v))} disabled={loadControlsDisabled} />
@@ -1044,7 +1043,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                         <Select label="Context Overflow" data={[{ value: 'truncate_middle', label: 'Truncate Middle' }, { value: 'truncate_start', label: 'Truncate Start' }, { value: 'error', label: 'Error' }]} value={loadSettings.context_overflow} onChange={(value) => setLoadSettings({ ...loadSettings, context_overflow: value ?? 'truncate_middle' })} disabled={loadControlsDisabled} />
                         <TextInput label="Stop Strings" placeholder="Enter a string and press Enter" value={stopStringInput} disabled={loadControlsDisabled} onChange={(e) => setStopStringInput(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const value = stopStringInput.trim(); if (value && !loadSettings.stop_strings.includes(value)) { setLoadSettings({ ...loadSettings, stop_strings: [...loadSettings.stop_strings, value] }); setStopStringInput(''); } } }} />
                         {loadSettings.stop_strings.length > 0 ? <Group gap="xs">{loadSettings.stop_strings.map(stop => <Badge key={stop} variant="light" color="gray" style={{ cursor: 'pointer' }} onClick={() => setLoadSettings({ ...loadSettings, stop_strings: loadSettings.stop_strings.filter(item => item !== stop) })}>{stop} ×</Badge>)}</Group> : null}
-                        <NumberInput label="Context Length" description={selectedModel?.context_length_max ? `Token window size (--ctx-size), max ${selectedModel.context_length_max.toLocaleString()}` : 'Token window size (--ctx-size). Max unknown; using safe fallback.'} min={512} max={contextLengthMax} step={512} value={contextLength} onChange={(v) => setClampedContextLength(Number(v))} disabled={loadControlsDisabled} />
+                        <NumberInput label="Context Length" description={selectedModel?.context_length_max ? `Token window size (--ctx-size), max ${selectedModel.context_length_max.toLocaleString()}` : 'Token window size (--ctx-size). Max unknown; using safe fallback.'} min={512} max={contextLengthMax} value={contextLength} onChange={(v) => typeof v === 'number' && setContextLength(v)} onBlur={() => setClampedContextLength(contextLength)} disabled={loadControlsDisabled} />
                         <Slider className="contextLengthSlider" min={512} max={contextLengthMax} step={512} value={Math.min(contextLength, contextLengthMax)} onChange={setClampedContextLength} disabled={loadControlsDisabled} marks={[{ value: 512, label: '512' }, { value: contextLengthMax, label: contextLengthMax.toLocaleString() }]} />
                         <NumberInput label="CPU Threads" description="Threads for inference (--threads)" min={1} max={256} value={nThreads} onChange={(v) => setNThreads(v === '' ? '' : Number(v))} disabled={loadControlsDisabled} />
                         <Slider min={1} max={64} step={1} value={nThreads === '' ? 10 : Math.min(64, nThreads)} onChange={(value) => setNThreads(value)} disabled={loadControlsDisabled} />

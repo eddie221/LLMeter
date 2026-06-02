@@ -759,10 +759,12 @@ async function sendChatMessage() {
     const fullMessages = session.systemPrompt.trim()
       ? [{ role: 'system', content: session.systemPrompt.trim() }, ...requestMessages]
       : requestMessages;
+    const maxTokensInput = document.querySelector('#chatMaxTokens');
+    const maxTokens = maxTokensInput ? Math.max(1, parseInt(maxTokensInput.value, 10) || 2048) : 2048;
     const result = await postAuthJson('/v1/chat/completions', {
       model,
       messages: fullMessages,
-      max_tokens: 2048,
+      max_tokens: maxTokens,
     });
     const output = result.choices?.[0]?.message?.content || result.output || '';
     session.messages.push({ role: 'assistant', content: output, timestamp: Date.now() });

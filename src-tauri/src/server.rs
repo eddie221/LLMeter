@@ -1090,7 +1090,11 @@ async fn list_models(State(state): State<ApiState>, headers: HeaderMap) -> Respo
         return resp;
     }
     match api_auth(&state.db, &headers) {
-        Ok(_auth) => {
+        Ok(auth) => {
+            state.runtime.push_log(format!(
+                "> GET /v1/models  key={}",
+                auth.api_key_prefix
+            )).await;
             let loaded = state.runtime.statuses().await;
             let mut models = Vec::new();
             for status in loaded.into_iter().filter(|status| status.loaded) {
@@ -1109,6 +1113,12 @@ async fn list_models(State(state): State<ApiState>, headers: HeaderMap) -> Respo
                     Err(err) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &err),
                 }
             }
+            let model_ids: Vec<_> = models.iter().map(|m| m.name.as_str()).collect();
+            state.runtime.push_log(format!(
+                "< 200 OK  {} model(s): {}",
+                model_ids.len(),
+                if model_ids.is_empty() { "none".into() } else { model_ids.join(", ") }
+            )).await;
             Json(json!({
                 "object": "list",
                 "data": models.into_iter().map(|model| json!({

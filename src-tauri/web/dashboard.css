@@ -168,8 +168,9 @@ code { color:var(--text); font-family:ui-monospace, SFMono-Regular, Menlo, monos
 .chatGroups button.active:hover small, #chatSessions button.active:hover small, .chatGroups button:not(.active):hover small, #chatSessions button:not(.active):hover small { color:rgba(255,255,255,.65); }
 /* ── Main chat area ── */
 .appChatMain { display:flex; flex-direction:column; height:100%; min-width:0; overflow:hidden; }
-.appChatTopbarWeb { align-items:end; border-bottom:1px solid var(--line-soft); display:grid; flex-shrink:0; gap:12px; grid-template-columns:minmax(180px,280px) minmax(0,1fr) auto; padding:14px 16px 12px; }
-.appChatModelControlWeb, .appChatTitleControlWeb { display:grid; font-size:11px; font-weight:900; gap:6px; letter-spacing:.08em; min-width:0; text-transform:uppercase; color:var(--muted); }
+.appChatTopbarWeb { align-items:end; border-bottom:1px solid var(--line-soft); display:grid; flex-shrink:0; gap:12px; grid-template-columns:minmax(180px,280px) 100px minmax(0,1fr) auto; padding:14px 16px 12px; }
+.appChatModelControlWeb, .appChatTitleControlWeb, .appChatMaxTokensControlWeb { display:grid; font-size:11px; font-weight:900; gap:6px; letter-spacing:.08em; min-width:0; text-transform:uppercase; color:var(--muted); }
+.appChatMaxTokensControlWeb input { width:100%; }
 .chatTopbarLabelWeb { color:var(--muted); display:block; font-size:11px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
 .appChatTopbarWeb select, .appChatTopbarWeb input { height:36px; font-size:13px; padding:0 10px; }
 .appChatTopbarActionsWeb { display:flex; gap:8px; align-items:flex-end; padding-bottom:1px; }
