@@ -15,6 +15,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
+use reqwest;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -169,6 +170,7 @@ impl ServerManager {
             .route("/v1/models", get(list_models))
             .route("/v1/messages", post(anthropic_messages))
             .route("/v1/chat/completions", post(chat_completions))
+            .route("/v1/embeddings", post(embeddings))
             .route("/api/v1/chat", post(simple_chat))
             .layer(CorsLayer::permissive())
             .with_state(ApiState {
@@ -1262,6 +1264,171 @@ struct AnthropicMessagesRequest {
     stream: Option<bool>,
     top_p: Option<f32>,
     top_k: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingsRequest {
+    model: String,
+}
+
+async fn embeddings(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(resp) = require_api_server_running(&state.server) {
+        return resp;
+    }
+    let auth = match api_auth(&state.db, &headers) {
+        Ok(auth) => auth,
+        Err(resp) => return resp,
+    };
+
+    let model = match serde_json::from_slice::<EmbeddingsRequest>(&body) {
+        Ok(req) => req.model,
+        Err(err) => {
+            let message = format!("Invalid embeddings request: {err}");
+            let _ = state.db.add_log(&RequestLogRecord {
+                id: 0,
+                user_id: auth.user_id,
+                display_name: None,
+                username: None,
+                api_key_prefix: auth.api_key_prefix,
+                endpoint: "/v1/embeddings".into(),
+                model: None,
+                input_text: String::new(),
+                output_text: String::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                status_code: 400,
+                error_message: Some(message.clone()),
+                created_at: now_ts(),
+            });
+            return api_error(StatusCode::BAD_REQUEST, &message);
+        }
+    };
+
+    state
+        .runtime
+        .push_log(format!(
+            "> POST /v1/embeddings  key={}  model=\"{}\"",
+            auth.api_key_prefix, model
+        ))
+        .await;
+
+    let endpoint = match state.runtime.embeddings_endpoint_for(&model).await {
+        Ok(url) => url,
+        Err(err) => {
+            state.runtime.push_log(format!("< 400 ERROR  {err}")).await;
+            let _ = state.db.add_log(&RequestLogRecord {
+                id: 0,
+                user_id: auth.user_id,
+                display_name: None,
+                username: None,
+                api_key_prefix: auth.api_key_prefix,
+                endpoint: "/v1/embeddings".into(),
+                model: Some(model),
+                input_text: String::new(),
+                output_text: String::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                status_code: 400,
+                error_message: Some(err.clone()),
+                created_at: now_ts(),
+            });
+            return api_error(StatusCode::BAD_REQUEST, &err);
+        }
+    };
+
+    let response = match reqwest::Client::new()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .body(body.to_vec())
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            let msg = format!("Failed to call llama-server: {err}");
+            state.runtime.push_log(format!("< 500 ERROR  {msg}")).await;
+            let _ = state.db.add_log(&RequestLogRecord {
+                id: 0,
+                user_id: auth.user_id,
+                display_name: None,
+                username: None,
+                api_key_prefix: auth.api_key_prefix,
+                endpoint: "/v1/embeddings".into(),
+                model: Some(model),
+                input_text: String::new(),
+                output_text: String::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                status_code: 500,
+                error_message: Some(msg.clone()),
+                created_at: now_ts(),
+            });
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg);
+        }
+    };
+
+    let status = response.status();
+    let resp_body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let err_msg = truncate(&resp_body, 500);
+        state
+            .runtime
+            .push_log(format!("< {} ERROR  {}", status.as_u16(), truncate(&resp_body, 120)))
+            .await;
+        let _ = state.db.add_log(&RequestLogRecord {
+            id: 0,
+            user_id: auth.user_id,
+            display_name: None,
+            username: None,
+            api_key_prefix: auth.api_key_prefix,
+            endpoint: "/v1/embeddings".into(),
+            model: Some(model),
+            input_text: String::new(),
+            output_text: String::new(),
+            input_tokens: 0,
+            output_tokens: 0,
+            status_code: status.as_u16() as i64,
+            error_message: Some(err_msg),
+            created_at: now_ts(),
+        });
+        return (
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            resp_body,
+        )
+            .into_response();
+    }
+
+    state
+        .runtime
+        .push_log(format!("< 200 OK  /v1/embeddings  model=\"{model}\""))
+        .await;
+    let _ = state.db.add_log(&RequestLogRecord {
+        id: 0,
+        user_id: auth.user_id,
+        display_name: None,
+        username: None,
+        api_key_prefix: auth.api_key_prefix,
+        endpoint: "/v1/embeddings".into(),
+        model: Some(model),
+        input_text: String::new(),
+        output_text: String::new(),
+        input_tokens: 0,
+        output_tokens: 0,
+        status_code: 200,
+        error_message: None,
+        created_at: now_ts(),
+    });
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        resp_body,
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]

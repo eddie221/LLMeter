@@ -144,6 +144,24 @@ impl ModelRuntime {
         Ok(format!("http://127.0.0.1:{port}/v1/chat/completions"))
     }
 
+    pub async fn embeddings_endpoint_for(&self, model_name: &str) -> Result<String, String> {
+        let inner = self.inner.lock().await;
+        let loaded = inner.get(model_name).ok_or_else(|| {
+            format!("Model '{model_name}' is not loaded. Load it before requesting embeddings.")
+        })?;
+        let enabled = loaded
+            .load_settings
+            .as_ref()
+            .map(|s| s.enable_embeddings)
+            .unwrap_or(false);
+        if !enabled {
+            return Err(format!(
+                "Model '{model_name}' was not loaded with embeddings enabled. Reload it with 'Enable embeddings' checked."
+            ));
+        }
+        Ok(format!("http://127.0.0.1:{}/v1/embeddings", loaded.port))
+    }
+
     pub async fn load_model(
         &self,
         db: &Db,
@@ -225,6 +243,13 @@ impl ModelRuntime {
                 if let Some(min_p) = settings.min_p {
                     args.push("--min-p".into());
                     args.push(min_p.to_string());
+                }
+            }
+            if settings.enable_embeddings {
+                args.push("--embedding".into());
+                if let Some(pooling) = &settings.pooling {
+                    args.push("--pooling".into());
+                    args.push(pooling.clone());
                 }
             }
         }

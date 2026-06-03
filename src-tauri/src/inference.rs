@@ -218,6 +218,7 @@ pub async fn run_chat(
 
     let mut parsed: ChatCompletionResponse = serde_json::from_str(&body)
         .map_err(|err| format!("llama-server returned an unexpected response: {err}"))?;
+    parsed.model = request.model.clone();
     let output_text = parsed
         .choices
         .first()

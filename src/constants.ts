@@ -35,6 +35,8 @@ export const defaultModelLoadSettings: ModelLoadSettings = {
   top_p: 0.95,
   min_p_enabled: true,
   min_p: 0.05,
+  enable_embeddings: false,
+  pooling: null,
 };
 
 export const modelChartColors = ['#14b8a6', '#4285f4', '#f2418f', '#9b5cf6', '#ff8a33', '#61c46d', '#facc15', '#38bdf8', '#fb7185', '#a3e635'];

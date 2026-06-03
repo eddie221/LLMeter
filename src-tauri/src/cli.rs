@@ -517,6 +517,8 @@ fn dispatch(args: &[String]) -> Result<(), String> {
                     top_p,
                     min_p_enabled: min_p.is_some(),
                     min_p,
+                    enable_embeddings: false,
+                    pooling: None,
                 })
             } else {
                 None

@@ -66,6 +66,7 @@ pub struct ModelRecord {
     pub hf_repo: Option<String>,
     pub model_type: Option<String>,
     pub mmproj_path: Option<String>,
+    pub pooling_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +99,10 @@ pub struct ModelLoadSettings {
     pub top_p: Option<f32>,
     pub min_p_enabled: bool,
     pub min_p: Option<f32>,
+    #[serde(default)]
+    pub enable_embeddings: bool,
+    #[serde(default)]
+    pub pooling: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

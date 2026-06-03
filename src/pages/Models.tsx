@@ -325,6 +325,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
   const [stopStringInput, setStopStringInput] = useState('');
   const [settingsSectionOpen, setSettingsSectionOpen] = useState(true);
   const [samplingSectionOpen, setSamplingSectionOpen] = useState(true);
+  const [embeddingsSectionOpen, setEmbeddingsSectionOpen] = useState(false);
   const [modelLoading, setModelLoading] = useState(false);
   const [deletingModelId, setDeletingModelId] = useState<number | null>(null);
   const [modelToDelete, setModelToDelete] = useState<ModelRecord | null>(null);
@@ -593,6 +594,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
   const selectedIsLoaded = Boolean(selectedLoadedStatus?.loaded);
   const selectedIsLoadable = Boolean(selectedModel && selectedModel.status !== 'unsupported');
   const contextLengthMax = selectedModel?.context_length_max ?? 131072;
+  const isEmbeddingModel = selectedModel?.model_type === 'feature-extraction' || selectedModel?.model_type === 'sentence-similarity';
   const loadControlsDisabled = modelLoading || !selectedModel || (!selectedIsLoaded && !selectedIsLoadable);
   const setClampedContextLength = (value: number) => setContextLength(Math.min(contextLengthMax, Math.max(512, Number(value) || 4096)));
   const currentLoadSettings = { ...loadSettings };
@@ -689,11 +691,12 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
     if (selectedLoadedStatus) {
       setClampedContextLength(selectedLoadedStatus.context_length ?? 4096);
       setNThreads(selectedLoadedStatus.n_threads ?? 10);
-      setLoadSettings(selectedLoadedStatus.load_settings ?? defaultModelLoadSettings);
+      const settings = selectedLoadedStatus.load_settings ?? defaultModelLoadSettings;
+      setLoadSettings(isEmbeddingModel ? { ...settings, enable_embeddings: true, pooling: settings.pooling ?? selectedModel?.pooling_type ?? null } : settings);
     } else if (selectedModel) {
       setClampedContextLength(4096);
       setNThreads(10);
-      setLoadSettings(defaultModelLoadSettings);
+      setLoadSettings({ ...defaultModelLoadSettings, enable_embeddings: isEmbeddingModel, pooling: selectedModel.pooling_type ?? null });
       setStopStringInput('');
     }
     setMmprojPathInput(selectedModel?.mmproj_path ?? '');
@@ -978,6 +981,10 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                             {loadSettings.top_p_enabled ? <><NumberInput size="xs" min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.top_p ?? 0.95} onChange={(v) => setLoadSettings({ ...loadSettings, top_p: Number(v) || 0.95 })} disabled={loadControlsDisabled} /><Slider size="xs" min={0} max={1} step={0.01} value={loadSettings.top_p ?? 0.95} onChange={(value) => setLoadSettings({ ...loadSettings, top_p: value })} disabled={loadControlsDisabled} /></> : null}
                             <Checkbox size="xs" labelPosition="right" label="Min P" checked={loadSettings.min_p_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, min_p_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
                             {loadSettings.min_p_enabled ? <><NumberInput size="xs" min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.min_p ?? 0.05} onChange={(v) => setLoadSettings({ ...loadSettings, min_p: Number(v) || 0.05 })} disabled={loadControlsDisabled} /><Slider size="xs" min={0} max={1} step={0.01} value={loadSettings.min_p ?? 0.05} onChange={(value) => setLoadSettings({ ...loadSettings, min_p: value })} disabled={loadControlsDisabled} /></> : null}
+                            <Checkbox size="xs" labelPosition="right" label="Enable Embeddings" description={isEmbeddingModel ? 'This model only supports embeddings.' : 'Exposes /v1/embeddings for this model (--embedding)'} checked={isEmbeddingModel || loadSettings.enable_embeddings} onChange={(e) => setLoadSettings({ ...loadSettings, enable_embeddings: e.currentTarget.checked })} disabled={loadControlsDisabled || isEmbeddingModel} />
+                            {(isEmbeddingModel || loadSettings.enable_embeddings) && (
+                              <Select size="xs" label="Pooling" description="How token vectors are pooled into one embedding (--pooling)" data={[{ value: 'none', label: 'None (per-token)' }, { value: 'mean', label: 'Mean' }, { value: 'cls', label: 'CLS' }, { value: 'last', label: 'Last' }, { value: 'rank', label: 'Rank' }]} value={loadSettings.pooling} placeholder={selectedModel?.pooling_type ? `Model default (${selectedModel.pooling_type})` : 'Model default'} clearable onChange={(v) => setLoadSettings({ ...loadSettings, pooling: v })} disabled={loadControlsDisabled} />
+                            )}
                           </Stack>
                         </Tabs.Panel>
                       </div>
@@ -1076,6 +1083,12 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                         <Checkbox labelPosition="right" label="Min P Sampling" checked={loadSettings.min_p_enabled} onChange={(e) => setLoadSettings({ ...loadSettings, min_p_enabled: e.currentTarget.checked })} disabled={loadControlsDisabled} />
                         <NumberInput min={0} max={1} step={0.01} decimalScale={2} value={loadSettings.min_p ?? 0.05} onChange={(v) => setLoadSettings({ ...loadSettings, min_p: Number(v) || 0.05 })} disabled={loadControlsDisabled || !loadSettings.min_p_enabled} />
                         <Slider min={0} max={1} step={0.01} value={loadSettings.min_p ?? 0.05} onChange={(value) => setLoadSettings({ ...loadSettings, min_p: value })} disabled={loadControlsDisabled || !loadSettings.min_p_enabled} />
+                      </LoadSettingsSection>
+                      <LoadSettingsSection title="Embeddings" open={embeddingsSectionOpen} onToggle={() => setEmbeddingsSectionOpen(!embeddingsSectionOpen)}>
+                        <Checkbox labelPosition="right" label="Enable Embeddings" description={isEmbeddingModel ? 'This model only supports embeddings.' : 'Exposes /v1/embeddings for this model (--embedding)'} checked={isEmbeddingModel || loadSettings.enable_embeddings} onChange={(e) => setLoadSettings({ ...loadSettings, enable_embeddings: e.currentTarget.checked })} disabled={loadControlsDisabled || isEmbeddingModel} />
+                        {(isEmbeddingModel || loadSettings.enable_embeddings) && (
+                          <Select label="Pooling" description="How token vectors are pooled into one embedding (--pooling)" data={[{ value: 'none', label: 'None (per-token)' }, { value: 'mean', label: 'Mean' }, { value: 'cls', label: 'CLS' }, { value: 'last', label: 'Last' }, { value: 'rank', label: 'Rank' }]} value={loadSettings.pooling} placeholder={selectedModel?.pooling_type ? `Model default (${selectedModel.pooling_type})` : 'Model default'} clearable onChange={(v) => setLoadSettings({ ...loadSettings, pooling: v })} disabled={loadControlsDisabled} />
+                        )}
                       </LoadSettingsSection>
                       <Button className="loadSettingsAction" onClick={applySelectedModelSettings} disabled={!selectedModel || modelLoading || (selectedIsLoaded ? !settingsChanged : !selectedIsLoadable)} loading={modelLoading}>{selectedIsLoaded ? 'Apply settings' : 'Load model'}</Button>
                     </Stack>

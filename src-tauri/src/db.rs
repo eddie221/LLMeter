@@ -117,6 +117,7 @@ impl Db {
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN hf_repo TEXT;");
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN model_type TEXT;");
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN mmproj_path TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN pooling_type TEXT;");
         let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN inference_defaults TEXT;");
         let _ = conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS user_provider_keys (
@@ -458,14 +459,19 @@ impl Db {
         } else {
             None
         };
+        let pooling_type = if format == "gguf" {
+            read_gguf_pooling_type(&stored_path).ok().flatten()
+        } else {
+            None
+        };
         name = self.unique_model_name(&name, &stored_path)?;
         let stored_path_string = stored_path.to_string_lossy().to_string();
         let conn = self.connect()?;
         conn.execute(
-            "INSERT INTO models (name, path, size_bytes, format, status, context_length_max, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(path) DO UPDATE SET size_bytes = excluded.size_bytes, format = excluded.format, status = excluded.status, context_length_max = excluded.context_length_max",
-            params![name, stored_path_string, stored_metadata.len() as i64, format, status, context_length_max, now_ts()],
+            "INSERT INTO models (name, path, size_bytes, format, status, context_length_max, created_at, pooling_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(path) DO UPDATE SET size_bytes = excluded.size_bytes, format = excluded.format, status = excluded.status, context_length_max = excluded.context_length_max, pooling_type = excluded.pooling_type",
+            params![name, stored_path_string, stored_metadata.len() as i64, format, status, context_length_max, now_ts(), pooling_type],
         )
         .map_err(|err| err.to_string())?;
         self.get_model_by_path(stored_path.to_string_lossy().to_string())
@@ -508,14 +514,19 @@ impl Db {
         } else {
             None
         };
+        let pooling_type = if format == "gguf" {
+            read_gguf_pooling_type(&stored_path).ok().flatten()
+        } else {
+            None
+        };
         name = self.unique_model_name(&name, &stored_path)?;
         let stored_path_string = stored_path.to_string_lossy().to_string();
         let conn = self.connect()?;
         conn.execute(
-            "INSERT INTO models (name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-             ON CONFLICT(path) DO UPDATE SET size_bytes = excluded.size_bytes, format = excluded.format, status = excluded.status, context_length_max = excluded.context_length_max, hf_repo = excluded.hf_repo, model_type = excluded.model_type, mmproj_path = excluded.mmproj_path",
-            params![name, stored_path_string, stored_metadata.len() as i64, format, status, context_length_max, now_ts(), hf_repo, model_type, mmproj_path],
+            "INSERT INTO models (name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path, pooling_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(path) DO UPDATE SET size_bytes = excluded.size_bytes, format = excluded.format, status = excluded.status, context_length_max = excluded.context_length_max, hf_repo = excluded.hf_repo, model_type = excluded.model_type, mmproj_path = excluded.mmproj_path, pooling_type = excluded.pooling_type",
+            params![name, stored_path_string, stored_metadata.len() as i64, format, status, context_length_max, now_ts(), hf_repo, model_type, mmproj_path, pooling_type],
         )
         .map_err(|err| err.to_string())?;
         self.get_model_by_path(stored_path.to_string_lossy().to_string())
@@ -563,13 +574,14 @@ impl Db {
                         .unwrap_or("model")
                         .to_string();
                     let context_length_max = read_gguf_context_length(&path).ok().flatten();
+                    let pooling_type = read_gguf_pooling_type(&path).ok().flatten();
                     let name = match self.unique_model_name(&name, &path) {
                         Ok(n) => n,
                         Err(_) => continue,
                     };
                     let _ = conn.execute(
-                        "INSERT OR IGNORE INTO models (name, path, size_bytes, format, status, context_length_max, created_at) VALUES (?1, ?2, ?3, 'gguf', 'ready', ?4, ?5)",
-                        params![name, path_str, metadata.len() as i64, context_length_max, crate::auth::now_ts()],
+                        "INSERT OR IGNORE INTO models (name, path, size_bytes, format, status, context_length_max, created_at, pooling_type) VALUES (?1, ?2, ?3, 'gguf', 'ready', ?4, ?5, ?6)",
+                        params![name, path_str, metadata.len() as i64, context_length_max, crate::auth::now_ts(), pooling_type],
                     );
                 }
             }
@@ -651,7 +663,7 @@ impl Db {
     pub fn list_models(&self) -> Result<Vec<ModelRecord>, String> {
         let conn = self.connect()?;
         let mut stmt = conn
-            .prepare("SELECT id, name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path FROM models ORDER BY name")
+            .prepare("SELECT id, name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path, pooling_type FROM models ORDER BY name")
             .map_err(|err| err.to_string())?;
         let rows = stmt
             .query_map([], model_from_row)
@@ -662,7 +674,7 @@ impl Db {
     pub fn get_model_by_name(&self, name: &str) -> Result<Option<ModelRecord>, String> {
         self.connect()?
             .query_row(
-                "SELECT id, name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path FROM models WHERE name = ?1",
+                "SELECT id, name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path, pooling_type FROM models WHERE name = ?1",
                 params![name],
                 model_from_row,
             )
@@ -673,7 +685,7 @@ impl Db {
     pub fn get_model_by_id(&self, id: i64) -> Result<Option<ModelRecord>, String> {
         self.connect()?
             .query_row(
-                "SELECT id, name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path FROM models WHERE id = ?1",
+                "SELECT id, name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path, pooling_type FROM models WHERE id = ?1",
                 params![id],
                 model_from_row,
             )
@@ -747,7 +759,7 @@ impl Db {
     fn get_model_by_path(&self, path: String) -> Result<ModelRecord, String> {
         self.connect()?
             .query_row(
-                "SELECT id, name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path FROM models WHERE path = ?1",
+                "SELECT id, name, path, size_bytes, format, status, context_length_max, created_at, hf_repo, model_type, mmproj_path, pooling_type FROM models WHERE path = ?1",
                 params![path],
                 model_from_row,
             )
@@ -1035,6 +1047,47 @@ fn collect_rows<T>(
         .map_err(|err| err.to_string())
 }
 
+fn gguf_pooling_type_to_str(value: u32) -> Option<&'static str> {
+    match value {
+        1 => Some("none"),
+        2 => Some("mean"),
+        3 => Some("cls"),
+        4 => Some("last"),
+        5 => Some("rank"),
+        _ => None, // 0 = unspecified
+    }
+}
+
+fn read_gguf_pooling_type(path: &Path) -> Result<Option<String>, String> {
+    let mut file = fs::File::open(path).map_err(|err| err.to_string())?;
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic).map_err(|err| err.to_string())?;
+    if &magic != b"GGUF" {
+        return Ok(None);
+    }
+    let _version = read_u32(&mut file)?;
+    let _tensor_count = read_u64(&mut file)?;
+    let kv_count = read_u64(&mut file)?;
+    for _ in 0..kv_count {
+        let key_len = read_u64(&mut file)? as usize;
+        if key_len > 4096 {
+            return Ok(None);
+        }
+        let mut key = vec![0u8; key_len];
+        file.read_exact(&mut key).map_err(|err| err.to_string())?;
+        let key = String::from_utf8_lossy(&key);
+        let value_type = read_u32(&mut file)?;
+        if key == "llm.pooling_type" {
+            return match read_gguf_numeric_value(&mut file, value_type)? {
+                Some(v) => Ok(gguf_pooling_type_to_str(v).map(|s| s.to_string())),
+                None => Ok(None),
+            };
+        }
+        skip_gguf_value(&mut file, value_type)?;
+    }
+    Ok(None)
+}
+
 fn read_gguf_context_length(path: &Path) -> Result<Option<u32>, String> {
     let mut file = fs::File::open(path).map_err(|err| err.to_string())?;
     let mut magic = [0u8; 4];
@@ -1133,6 +1186,7 @@ fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRecord> {
         hf_repo: row.get(8).unwrap_or(None),
         model_type: row.get(9).unwrap_or(None),
         mmproj_path: row.get(10).unwrap_or(None),
+        pooling_type: row.get(11).unwrap_or(None),
     })
 }
 
