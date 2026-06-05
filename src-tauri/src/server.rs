@@ -40,6 +40,7 @@ struct ApiState {
     runtime: ModelRuntime,
     server: ServerManager,
     session_store_dir: PathBuf,
+    client: reqwest::Client,
 }
 
 impl ServerManager {
@@ -178,6 +179,7 @@ impl ServerManager {
                 runtime,
                 server: self.clone(),
                 session_store_dir,
+                client: reqwest::Client::new(),
             });
 
         {
@@ -1197,7 +1199,10 @@ async fn chat_completions(
         .map(|msg| format!("{}: {}", msg.role, msg.content.to_log_text()))
         .collect::<Vec<_>>()
         .join("\n");
-    match run_chat(&state.db, &state.runtime, payload).await {
+    state.runtime.increment_active(&model).await;
+    let result = run_chat(&state.db, &state.runtime, payload).await;
+    state.runtime.decrement_active(&model).await;
+    match result {
         Ok(result) => {
             state
                 .runtime
@@ -1340,7 +1345,8 @@ async fn embeddings(
         }
     };
 
-    let response = match reqwest::Client::new()
+    state.runtime.increment_active(&model).await;
+    let response = match state.client
         .post(&endpoint)
         .header("Content-Type", "application/json")
         .body(body.to_vec())
@@ -1358,7 +1364,7 @@ async fn embeddings(
                 username: None,
                 api_key_prefix: auth.api_key_prefix,
                 endpoint: "/v1/embeddings".into(),
-                model: Some(model),
+                model: Some(model.clone()),
                 input_text: String::new(),
                 output_text: String::new(),
                 input_tokens: 0,
@@ -1367,6 +1373,7 @@ async fn embeddings(
                 error_message: Some(msg.clone()),
                 created_at: now_ts(),
             });
+            state.runtime.decrement_active(&model).await;
             return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg);
         }
     };
@@ -1386,7 +1393,7 @@ async fn embeddings(
             username: None,
             api_key_prefix: auth.api_key_prefix,
             endpoint: "/v1/embeddings".into(),
-            model: Some(model),
+            model: Some(model.clone()),
             input_text: String::new(),
             output_text: String::new(),
             input_tokens: 0,
@@ -1395,6 +1402,7 @@ async fn embeddings(
             error_message: Some(err_msg),
             created_at: now_ts(),
         });
+        state.runtime.decrement_active(&model).await;
         return (
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -1403,6 +1411,7 @@ async fn embeddings(
             .into_response();
     }
 
+    state.runtime.decrement_active(&model).await;
     state
         .runtime
         .push_log(format!("< 200 OK  /v1/embeddings  model=\"{model}\""))

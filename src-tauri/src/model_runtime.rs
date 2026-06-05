@@ -16,14 +16,22 @@ const MAX_LOG_LINES: usize = 500;
 #[derive(Clone)]
 pub struct ModelRuntime {
     inner: Arc<Mutex<HashMap<String, LoadedModel>>>,
+    loading: Arc<Mutex<HashMap<String, ModelRecord>>>,
+    active: Arc<Mutex<HashMap<String, usize>>>,
+    last_used: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     logs: Arc<Mutex<Vec<String>>>,
+    pub client: reqwest::Client,
 }
 
 impl Default for ModelRuntime {
     fn default() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            loading: Arc::new(Mutex::new(HashMap::new())),
+            active: Arc::new(Mutex::new(HashMap::new())),
+            last_used: Arc::new(Mutex::new(HashMap::new())),
             logs: Arc::new(Mutex::new(Vec::new())),
+            client: reqwest::Client::new(),
         }
     }
 }
@@ -62,16 +70,20 @@ impl ModelRuntime {
 
     pub async fn statuses(&self) -> Vec<LoadedModelStatus> {
         let mut inner = self.inner.lock().await;
+        let active = self.active.lock().await;
         let mut statuses = Vec::with_capacity(inner.len());
         let mut exited = Vec::new();
 
         for (runtime_name, loaded) in inner.iter_mut() {
+            let busy = active.get(runtime_name).copied().unwrap_or(0) > 0;
             match loaded.child.try_wait() {
                 Ok(Some(status)) => {
                     let model_name = loaded.runtime_name.clone();
                     exited.push(runtime_name.clone());
                     statuses.push(LoadedModelStatus {
                         loaded: false,
+                        loading: false,
+                        busy: false,
                         model_id: None,
                         model_name: None,
                         model_type: None,
@@ -87,6 +99,8 @@ impl ModelRuntime {
                 }
                 Ok(None) => statuses.push(LoadedModelStatus {
                     loaded: true,
+                    loading: false,
+                    busy,
                     model_id: Some(loaded.model.id),
                     model_name: Some(loaded.runtime_name.clone()),
                     model_type: loaded.model.model_type.clone(),
@@ -99,6 +113,8 @@ impl ModelRuntime {
                 }),
                 Err(err) => statuses.push(LoadedModelStatus {
                     loaded: false,
+                    loading: false,
+                    busy,
                     model_id: Some(loaded.model.id),
                     model_name: Some(loaded.runtime_name.clone()),
                     model_type: loaded.model.model_type.clone(),
@@ -115,32 +131,61 @@ impl ModelRuntime {
         for runtime_name in exited {
             inner.remove(&runtime_name);
         }
+        drop(inner);
+        drop(active);
+
+        // Include models that are currently being loaded.
+        let loading = self.loading.lock().await;
+        for (runtime_name, model) in loading.iter() {
+            statuses.push(LoadedModelStatus {
+                loaded: false,
+                loading: true,
+                busy: false,
+                model_id: Some(model.id),
+                model_name: Some(runtime_name.clone()),
+                model_type: model.model_type.clone(),
+                mmproj_path: model.mmproj_path.clone(),
+                port: None,
+                context_length: None,
+                n_threads: None,
+                load_settings: None,
+                error: None,
+            });
+        }
 
         statuses
     }
 
+    pub async fn increment_active(&self, runtime_name: &str) {
+        let mut active = self.active.lock().await;
+        *active.entry(runtime_name.to_string()).or_insert(0) += 1;
+    }
+
+    pub async fn decrement_active(&self, runtime_name: &str) {
+        let mut active = self.active.lock().await;
+        if let Some(count) = active.get_mut(runtime_name) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                active.remove(runtime_name);
+            }
+        }
+        drop(active);
+        self.last_used.lock().await.insert(runtime_name.to_string(), std::time::Instant::now());
+    }
+
     pub async fn loaded_model_ids(&self) -> Vec<i64> {
-        self.statuses()
-            .await
-            .into_iter()
-            .filter_map(|status| status.loaded.then_some(status.model_id).flatten())
-            .collect()
+        self.inner.lock().await.values().map(|m| m.model.id).collect()
     }
 
     pub async fn endpoint_for(&self, model_name: &str) -> Result<String, String> {
-        let statuses = self.statuses().await;
-        if statuses.iter().all(|status| !status.loaded) {
+        let inner = self.inner.lock().await;
+        if inner.is_empty() {
             return Err("Load a model into RAM before requesting chat completions.".into());
         }
-        let status = statuses
-            .into_iter()
-            .find(|status| status.loaded && status.model_name.as_deref() == Some(model_name))
-            .ok_or_else(|| {
-                format!("Model '{model_name}' is not loaded. Load it before requesting chat completions.")
-            })?;
-        let port = status
-            .port
-            .ok_or_else(|| "Loaded model has no runtime port.".to_string())?;
+        let port = inner
+            .get(model_name)
+            .ok_or_else(|| format!("Model '{model_name}' is not loaded. Load it before requesting chat completions."))?
+            .port;
         Ok(format!("http://127.0.0.1:{port}/v1/chat/completions"))
     }
 
@@ -174,6 +219,21 @@ impl ModelRuntime {
             .get_model_by_id(model_id)?
             .ok_or_else(|| format!("Unknown model id {model_id}."))?;
         let runtime_name = self.next_runtime_name(&model.name).await;
+        self.loading.lock().await.insert(runtime_name.clone(), model.clone());
+        let result = self.load_model_inner(model, runtime_name.clone(), context_length, n_threads, load_settings, db).await;
+        self.loading.lock().await.remove(&runtime_name);
+        result
+    }
+
+    async fn load_model_inner(
+        &self,
+        model: ModelRecord,
+        runtime_name: String,
+        context_length: Option<u32>,
+        n_threads: Option<u32>,
+        load_settings: Option<ModelLoadSettings>,
+        db: &Db,
+    ) -> Result<Vec<LoadedModelStatus>, String> {
         if model.status != "ready" {
             return Err(format!(
                 "Model '{}' is not ready. Only GGUF models can be loaded.",
@@ -308,7 +368,6 @@ impl ModelRuntime {
         // map into RAM; a fixed sleep would either time out too early or
         // leave the caller with a process that can't serve requests yet.
         let health_url = format!("http://127.0.0.1:{port}/health");
-        let client = reqwest::Client::new();
         let start = tokio::time::Instant::now();
         let timeout = Duration::from_secs(300);
         loop {
@@ -330,7 +389,7 @@ impl ModelRuntime {
                 Ok(None) => {}
                 Err(err) => return Err(err.to_string()),
             }
-            if let Ok(resp) = client
+            if let Ok(resp) = self.client
                 .get(&health_url)
                 .timeout(Duration::from_secs(2))
                 .send()
@@ -345,6 +404,7 @@ impl ModelRuntime {
 
         tracing::info!("[{}] model ready on port {}", runtime_name, port);
         self.push_log(format!("[{runtime_name}] Ready — model loaded on :{port}")).await;
+        self.last_used.lock().await.insert(runtime_name.clone(), std::time::Instant::now());
         let mut inner = self.inner.lock().await;
         inner.insert(
             runtime_name.clone(),
@@ -368,12 +428,26 @@ impl ModelRuntime {
     ) -> Result<Vec<LoadedModelStatus>, String> {
         let mut loaded = {
             let mut inner = self.inner.lock().await;
-            if let Some(model_name) = model_name {
-                inner.remove(&model_name).into_iter().collect::<Vec<_>>()
+            let active = self.active.lock().await;
+            if let Some(ref name) = model_name {
+                if active.get(name).copied().unwrap_or(0) > 0 {
+                    return Err(format!("Model '{name}' is currently processing a request. Wait for it to finish before ejecting."));
+                }
+                inner.remove(name).into_iter().collect::<Vec<_>>()
             } else {
+                let busy: Vec<_> = inner.keys().filter(|k| active.get(*k).copied().unwrap_or(0) > 0).cloned().collect();
+                if !busy.is_empty() {
+                    return Err(format!("Model(s) {} are currently processing requests. Wait for them to finish.", busy.join(", ")));
+                }
                 inner.drain().map(|(_, loaded)| loaded).collect::<Vec<_>>()
             }
         };
+        {
+            let mut last_used = self.last_used.lock().await;
+            for model in &loaded {
+                last_used.remove(&model.runtime_name);
+            }
+        }
         for model in &mut loaded {
             let _ = model.child.kill().await;
             let _ = model.child.wait().await;
@@ -385,23 +459,64 @@ impl ModelRuntime {
     pub async fn eject_model_id(&self, model_id: i64) -> Result<Vec<LoadedModelStatus>, String> {
         let mut loaded = {
             let mut inner = self.inner.lock().await;
-            let matching_names = inner
+            let active = self.active.lock().await;
+            let matching_names: Vec<_> = inner
                 .iter()
                 .filter_map(|(runtime_name, loaded)| {
                     (loaded.model.id == model_id).then(|| runtime_name.clone())
                 })
-                .collect::<Vec<_>>();
+                .collect();
+            for name in &matching_names {
+                if active.get(name).copied().unwrap_or(0) > 0 {
+                    return Err(format!("Model '{name}' is currently processing a request. Wait for it to finish before ejecting."));
+                }
+            }
             matching_names
                 .into_iter()
                 .filter_map(|runtime_name| inner.remove(&runtime_name))
                 .collect::<Vec<_>>()
         };
+        {
+            let mut last_used = self.last_used.lock().await;
+            for model in &loaded {
+                last_used.remove(&model.runtime_name);
+            }
+        }
         for model in &mut loaded {
             let _ = model.child.kill().await;
             let _ = model.child.wait().await;
             self.push_log(format!("[{}] Model ejected", model.runtime_name)).await;
         }
         Ok(self.statuses().await)
+    }
+
+    pub fn start_auto_eject_loop(&self) {
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_secs(60)).await;
+                let to_eject: Vec<String> = {
+                    let inner = runtime.inner.lock().await;
+                    let last_used = runtime.last_used.lock().await;
+                    let now = std::time::Instant::now();
+                    inner
+                        .iter()
+                        .filter_map(|(name, loaded)| {
+                            let lifetime = loaded.load_settings.as_ref()?.lifetime_secs?;
+                            let lu = last_used.get(name)?;
+                            if now.duration_since(*lu).as_secs() >= lifetime as u64 {
+                                Some(name.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                };
+                for name in to_eject {
+                    let _ = runtime.eject_model(Some(name)).await;
+                }
+            }
+        });
     }
 
     async fn next_runtime_name(&self, base_name: &str) -> String {

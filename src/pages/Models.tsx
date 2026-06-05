@@ -295,10 +295,6 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
   const modelStore = useAsyncData<string>(() => invoke('get_model_store_dir'), []);
   const systemMemory = useAsyncData<SystemMemory>(() => invoke('get_system_memory'), []);
   useEffect(() => {
-    const id = setInterval(() => { void loadedStatus.reload(); }, 4000);
-    return () => clearInterval(id);
-  }, [loadedStatus.reload]);
-  useEffect(() => {
     const id = setInterval(() => { void reload(); }, 8000);
     return () => clearInterval(id);
   }, [reload]);
@@ -326,7 +322,13 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
   const [settingsSectionOpen, setSettingsSectionOpen] = useState(true);
   const [samplingSectionOpen, setSamplingSectionOpen] = useState(true);
   const [embeddingsSectionOpen, setEmbeddingsSectionOpen] = useState(false);
+  const [lifetimeSectionOpen, setLifetimeSectionOpen] = useState(false);
   const [modelLoading, setModelLoading] = useState(false);
+  useEffect(() => {
+    const interval = modelLoading ? 500 : 4000;
+    const id = setInterval(() => { void loadedStatus.reload(); }, interval);
+    return () => clearInterval(id);
+  }, [loadedStatus.reload, modelLoading]);
   const [deletingModelId, setDeletingModelId] = useState<number | null>(null);
   const [modelToDelete, setModelToDelete] = useState<ModelRecord | null>(null);
   const [downloadToast, setDownloadToast] = useState<{ message: string; key: number } | null>(null);
@@ -581,6 +583,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
   const visibleModels = modelsPageData.rows;
   const loadedStatuses = loadedStatus.data ?? [];
   const activeLoadedStatuses = loadedStatuses.filter(s => s.loaded && s.model_id !== null && s.model_name);
+  const loadingStatuses = loadedStatuses.filter(s => s.loading && s.model_name);
   const loadedByName = new Map(activeLoadedStatuses.map(s => [s.model_name as string, s]));
   const loadedBaseIds = new Set(activeLoadedStatuses.map(s => s.model_id as number));
   const loadedModels = activeLoadedStatuses
@@ -837,7 +840,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                   )}
                 </Group>
 
-                {loadedModels.length > 0 ? (
+                {loadedModels.length > 0 || loadingStatuses.length > 0 ? (
                   <Stack gap="sm">
                     {loadedModels.map((loadedModel) => {
                       const status = loadedByName.get(loadedModel.name);
@@ -884,12 +887,25 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                             <Group gap="md" style={{ flexShrink: 0 }}>
                               <Text size="sm" c="dimmed">Size <Text span fw={700} c="white">{formatBytes(loadedModel.size_bytes)}</Text></Text>
                               {status?.context_length ? <Text size="sm" c="dimmed">Context <Text span fw={700} c="white">{status.context_length.toLocaleString()}</Text></Text> : null}
-                              {isAdmin && <Button size="xs" color="red" variant="light" leftSection={<Bi name="eject" />} onClick={(event) => { event.stopPropagation(); void ejectModel(loadedModel.name); }}>Eject</Button>}
+                              {status?.busy ? <Badge size="sm" color="yellow" variant="light">In use</Badge> : null}
+                              {isAdmin && <Button size="xs" color="red" variant="light" leftSection={<Bi name="eject" />} disabled={status?.busy || status?.loading} title={status?.busy ? 'Model is processing a request' : undefined} onClick={(event) => { event.stopPropagation(); void ejectModel(loadedModel.name); }}>Eject</Button>}
                             </Group>
                           </Group>
                         </Card>
                       );
                     })}
+                    {loadingStatuses.map(s => (
+                      <Card key={s.model_name} withBorder p={0} style={{ overflow: 'hidden' }}>
+                        <Progress value={100} animated size="xs" />
+                        <Group justify="space-between" px="md" py="sm" wrap="nowrap">
+                          <Group gap="xs">
+                            <Badge variant="default" radius="sm" size="sm">llm</Badge>
+                            <Text className="mono" c="dimmed" fw={600} size="sm">{s.model_name}</Text>
+                            <Text size="xs" c="dimmed">Loading…</Text>
+                          </Group>
+                        </Group>
+                      </Card>
+                    ))}
                   </Stack>
                 ) : (
                   <EmptyState
@@ -985,6 +1001,8 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                             {(isEmbeddingModel || loadSettings.enable_embeddings) && (
                               <Select size="xs" label="Pooling" description="How token vectors are pooled into one embedding (--pooling)" data={[{ value: 'none', label: 'None (per-token)' }, { value: 'mean', label: 'Mean' }, { value: 'cls', label: 'CLS' }, { value: 'last', label: 'Last' }, { value: 'rank', label: 'Rank' }]} value={loadSettings.pooling} placeholder={selectedModel?.pooling_type ? `Model default (${selectedModel.pooling_type})` : 'Model default'} clearable onChange={(v) => setLoadSettings({ ...loadSettings, pooling: v })} disabled={loadControlsDisabled} />
                             )}
+                            <Divider label="Lifetime" labelPosition="left" my={4} />
+                            <NumberInput size="xs" label="Auto-eject after (min)" description="Leave empty to keep loaded indefinitely." min={1} allowDecimal={false} value={loadSettings.lifetime_secs !== null ? Math.round(loadSettings.lifetime_secs / 60) : ''} onChange={(v) => setLoadSettings({ ...loadSettings, lifetime_secs: v !== '' ? Number(v) * 60 : null })} disabled={loadControlsDisabled} />
                           </Stack>
                         </Tabs.Panel>
                       </div>
@@ -1024,7 +1042,7 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                             <Table.Td><ModelTypeBadge model={model} /></Table.Td>
                             <Table.Td><Badge color={loadedBaseIds.has(model.id) ? 'green' : 'gray'} variant={loadedBaseIds.has(model.id) ? 'light' : 'outline'}>{loadedBaseIds.has(model.id) ? 'loaded' : 'unloaded'}</Badge></Table.Td>
                             <Table.Td>{formatBytes(model.size_bytes)}</Table.Td>
-                            {isAdmin ? <Table.Td><Button size="xs" color="red" variant="light" loading={deletingModelId === model.id} disabled={deletingModelId !== null && deletingModelId !== model.id} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => requestDeleteModel(event, model)}>Delete</Button></Table.Td> : null}
+                            {isAdmin ? <Table.Td><Button size="xs" color="red" variant="light" loading={deletingModelId === model.id} disabled={(deletingModelId !== null && deletingModelId !== model.id) || loadedStatuses.some(s => s.model_id === model.id && (s.busy || s.loading))} title={loadedStatuses.some(s => s.model_id === model.id && s.busy) ? 'Model is processing a request' : loadedStatuses.some(s => s.model_id === model.id && s.loading) ? 'Model is loading' : undefined} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => requestDeleteModel(event, model)}>Delete</Button></Table.Td> : null}
                           </Table.Tr>
                         ))}
                       </Table.Tbody>
@@ -1089,6 +1107,9 @@ export function ModelsPage({ currentUser, serverStatus, setServerStatus, reloadS
                         {(isEmbeddingModel || loadSettings.enable_embeddings) && (
                           <Select label="Pooling" description="How token vectors are pooled into one embedding (--pooling)" data={[{ value: 'none', label: 'None (per-token)' }, { value: 'mean', label: 'Mean' }, { value: 'cls', label: 'CLS' }, { value: 'last', label: 'Last' }, { value: 'rank', label: 'Rank' }]} value={loadSettings.pooling} placeholder={selectedModel?.pooling_type ? `Model default (${selectedModel.pooling_type})` : 'Model default'} clearable onChange={(v) => setLoadSettings({ ...loadSettings, pooling: v })} disabled={loadControlsDisabled} />
                         )}
+                      </LoadSettingsSection>
+                      <LoadSettingsSection title="Lifetime" open={lifetimeSectionOpen} onToggle={() => setLifetimeSectionOpen(!lifetimeSectionOpen)}>
+                        <NumberInput label="Auto-eject after (min)" description="Automatically unload this model after the specified minutes of inactivity. Leave empty to keep loaded indefinitely." min={1} allowDecimal={false} value={loadSettings.lifetime_secs !== null ? Math.round(loadSettings.lifetime_secs / 60) : ''} onChange={(v) => setLoadSettings({ ...loadSettings, lifetime_secs: v !== '' ? Number(v) * 60 : null })} disabled={loadControlsDisabled} />
                       </LoadSettingsSection>
                       <Button className="loadSettingsAction" onClick={applySelectedModelSettings} disabled={!selectedModel || modelLoading || (selectedIsLoaded ? !settingsChanged : !selectedIsLoadable)} loading={modelLoading}>{selectedIsLoaded ? 'Apply settings' : 'Load model'}</Button>
                     </Stack>

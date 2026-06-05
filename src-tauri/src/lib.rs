@@ -1651,6 +1651,7 @@ pub fn run() {
             let auto_start_runtime = runtime.clone();
             let auto_start_server = server.clone();
             let auto_start_sessions = session_store_dir.clone();
+            let auto_eject_runtime = runtime.clone();
             app.manage(AppState {
                 db,
                 runtime,
@@ -1664,6 +1665,7 @@ pub fn run() {
                 _log_guard: log_guard,
             });
             tauri::async_runtime::spawn(async move {
+                auto_eject_runtime.start_auto_eject_loop();
                 match auto_start_server
                     .ensure_service(auto_start_db, auto_start_runtime, auto_start_sessions)
                     .await

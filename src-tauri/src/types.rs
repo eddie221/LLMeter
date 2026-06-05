@@ -72,6 +72,8 @@ pub struct ModelRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedModelStatus {
     pub loaded: bool,
+    pub loading: bool,
+    pub busy: bool,
     pub model_id: Option<i64>,
     pub model_name: Option<String>,
     pub model_type: Option<String>,
@@ -103,6 +105,8 @@ pub struct ModelLoadSettings {
     pub enable_embeddings: bool,
     #[serde(default)]
     pub pooling: Option<String>,
+    #[serde(default)]
+    pub lifetime_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

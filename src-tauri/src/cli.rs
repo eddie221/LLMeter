@@ -519,6 +519,7 @@ fn dispatch(args: &[String]) -> Result<(), String> {
                     min_p,
                     enable_embeddings: false,
                     pooling: None,
+                    lifetime_secs: None,
                 })
             } else {
                 None

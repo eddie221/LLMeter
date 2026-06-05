@@ -165,7 +165,7 @@ pub async fn run_chat(
     )).await;
 
     if request.model.starts_with("claude-") {
-        return run_anthropic_chat(db, request).await;
+        return run_anthropic_chat(db, &runtime.client, request).await;
     }
 
     let model = db
@@ -199,7 +199,7 @@ pub async fn run_chat(
         .join("\n");
 
     let t0 = std::time::Instant::now();
-    let response = reqwest::Client::new()
+    let response = runtime.client
         .post(endpoint)
         .json(&request)
         .send()
@@ -310,6 +310,7 @@ fn content_to_anthropic(content: &ChatMessageContent) -> serde_json::Value {
 #[tracing::instrument(skip_all, fields(model = %request.model, num_messages = request.messages.len()), err)]
 async fn run_anthropic_chat(
     db: &Db,
+    client: &reqwest::Client,
     request: ChatCompletionRequest,
 ) -> Result<InferenceResult, String> {
     tracing::info!("run_anthropic_chat entered");
@@ -362,7 +363,7 @@ async fn run_anthropic_chat(
     }
 
     let t0 = std::time::Instant::now();
-    let response = reqwest::Client::new()
+    let response = client
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", &api_key)
         .header("anthropic-version", "2023-06-01")
