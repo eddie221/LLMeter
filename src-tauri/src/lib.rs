@@ -1602,6 +1602,16 @@ async fn cancel_download(
     Ok(())
 }
 
+#[tauri::command]
+fn get_cli_binary_path() -> Option<String> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::current_exe()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
 pub fn run_cli(args: &[String]) -> i32 {
     cli::run(args)
 }
@@ -1726,7 +1736,8 @@ pub fn run() {
             dashboard,
             chat,
             get_system_memory,
-            cancel_download
+            cancel_download,
+            get_cli_binary_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running LLMeter");

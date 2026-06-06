@@ -1,14 +1,20 @@
+import { invoke } from '@tauri-apps/api/core';
 import {
   Accordion,
+  ActionIcon,
   Badge,
   Card,
   Code,
   Group,
   Stack,
   Text,
+  Tooltip,
 } from '@mantine/core';
+import { useState } from 'react';
 
+import { Bi } from '../components/Bi';
 import { Header } from '../components/common';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 type CliOption = { flag: string; description: string; required?: boolean };
 type CliCommand = {
@@ -215,10 +221,53 @@ function CommandCard({ cmd }: { cmd: CliCommand }) {
   );
 }
 
+function BinaryPathCard() {
+  const { data: binaryPath } = useAsyncData<string | null>(() => invoke('get_cli_binary_path'), []);
+  const [copied, setCopied] = useState(false);
+  const copy = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <Card withBorder className="noticeCard info">
+      <Stack gap="xs">
+        <Text fw={600} size="sm">Running the CLI</Text>
+        {binaryPath === null ? (
+          <Text size="sm" c="dimmed">
+            Binary path is not available in development mode. In a production build the full path to the LLMeter binary will appear here.
+          </Text>
+        ) : (
+          <>
+            <Text size="sm" c="dimmed">
+              The CLI is built into the LLMeter binary. The app binary is not on your PATH by default.
+              Use the full path below, or create a shell alias so you can run it as <Code>llmeter</Code>.
+            </Text>
+            <Group gap="xs" wrap="nowrap">
+              <Code style={{ flex: 1, wordBreak: 'break-all' }}>{binaryPath}</Code>
+              <Tooltip label={copied ? 'Copied!' : 'Copy path'} withArrow>
+                <ActionIcon variant="light" size="lg" onClick={() => copy(binaryPath)}>
+                  <Bi name={copied ? 'check-lg' : 'clipboard'} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
+            <Text size="xs" c="dimmed">
+              Example alias — add to <Code>~/.zshrc</Code> or <Code>~/.bashrc</Code>:{' '}
+              <Code>{`alias llmeter='${binaryPath}'`}</Code>
+            </Text>
+          </>
+        )}
+      </Stack>
+    </Card>
+  );
+}
+
 export function CliPage() {
   return (
     <Stack>
       <Header title="CLI Reference" subtitle="Admin-only command-line interface for managing LLMeter" />
+
+      <BinaryPathCard />
 
       <Card withBorder className="cliGlobalCard">
         <Stack gap="xs">
