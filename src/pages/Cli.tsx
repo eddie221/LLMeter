@@ -97,7 +97,10 @@ const CLI_GROUPS: CliGroup[] = [
       {
         syntax: 'llmeter model list',
         description: 'List all imported models with their ID, name, format, and status.',
-        example: 'llmeter -u admin -p secret model list',
+        options: [
+          { flag: '--detail', description: 'Show size, path, max context length, model type, and HF repo for each model' },
+        ],
+        example: 'llmeter -u admin -p secret model list --detail',
       },
       {
         syntax: 'llmeter model import',
@@ -117,20 +120,26 @@ const CLI_GROUPS: CliGroup[] = [
       },
       {
         syntax: 'llmeter model load',
-        description: 'Load a model into the running server. Requires the server to be started.',
+        description: 'Load a model into the running server. Requires the server to be started. All sampling settings are optional; omitting them uses the saved defaults.',
         options: [
           { flag: '--name <n>', description: 'Model name (use instead of --id)' },
           { flag: '--id <id>', description: 'Model ID' },
           { flag: '--ctx <n>', description: 'Context window size in tokens' },
-          { flag: '--threads <n>', description: 'CPU threads to use' },
+          { flag: '--threads <n>', description: 'CPU threads to use for inference' },
           { flag: '--temperature <f>', description: 'Sampling temperature (e.g. 0.8)' },
           { flag: '--top-p <f>', description: 'Top-p nucleus sampling (e.g. 0.95)' },
           { flag: '--top-k <n>', description: 'Top-k sampling (e.g. 40)' },
           { flag: '--min-p <f>', description: 'Min-p sampling (e.g. 0.05)' },
           { flag: '--repeat-penalty <f>', description: 'Repetition penalty (e.g. 1.1)' },
-          { flag: '--max-tokens <n>', description: 'Max response tokens' },
+          { flag: '--presence-penalty <f>', description: 'Presence penalty (e.g. 0.0)' },
+          { flag: '--max-tokens <n>', description: 'Maximum response tokens (enables length limit)' },
+          { flag: '--context-overflow <s>', description: 'How to handle context overflow: truncate_middle (default) | truncate_start | error' },
+          { flag: '--stop <s>', description: 'Comma-separated stop strings (e.g. --stop "</s>,<|end|>")' },
+          { flag: '--embeddings', description: 'Enable embeddings mode — exposes /v1/embeddings for this model' },
+          { flag: '--pooling <s>', description: 'Embedding pooling strategy: none | mean | cls | last | rank' },
+          { flag: '--lifetime <n>', description: 'Auto-eject after <n> minutes of inactivity' },
         ],
-        example: 'llmeter -u admin -p secret model load --name mistral-7b --ctx 4096 --threads 8',
+        example: 'llmeter -u admin -p secret model load --name mistral-7b --ctx 4096 --threads 8 --temperature 0.7 --top-p 0.95 --repeat-penalty 1.1 --lifetime 30',
       },
       {
         syntax: 'llmeter model unload',
@@ -143,7 +152,10 @@ const CLI_GROUPS: CliGroup[] = [
       {
         syntax: 'llmeter model status',
         description: 'Show currently loaded models with their port and context length.',
-        example: 'llmeter -u admin -p secret model status',
+        options: [
+          { flag: '--detail', description: 'Show full inference settings for each loaded model (temperature, sampling, stop strings, lifetime, etc.)' },
+        ],
+        example: 'llmeter -u admin -p secret model status --detail',
       },
     ],
   },

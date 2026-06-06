@@ -1287,6 +1287,9 @@ async fn start_server(
         )
         .await?;
     tracing::info!(host = %status.host, port = status.port, "server started");
+    // Write PID file so `llmeter server status` reflects the UI-started server
+    let pid_path = server_pid_path(&state.database_path);
+    let _ = std::fs::write(&pid_path, std::process::id().to_string());
     Ok(status)
 }
 
@@ -1294,7 +1297,11 @@ async fn start_server(
 fn stop_server(state: State<'_, AppState>, requester_role: String) -> Result<ServerStatus, String> {
     require_admin(&requester_role)?;
     tracing::info!("stop_server called");
-    Ok(state.server.stop())
+    let status = state.server.stop();
+    // Remove PID file so `llmeter server status` reflects the stopped state
+    let pid_path = server_pid_path(&state.database_path);
+    let _ = std::fs::remove_file(&pid_path);
+    Ok(status)
 }
 
 #[tauri::command]
@@ -1307,6 +1314,38 @@ fn get_server_status(
     Ok(state.server.status())
 }
 
+fn server_pid_path(database_path: &std::path::Path) -> std::path::PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("llmeter-daemon.pid")
+}
+
+fn daemon_pid_running(database_path: &std::path::Path) -> bool {
+    let pid_path = server_pid_path(database_path);
+    let Some(pid) = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 fn get_public_server_status(state: State<'_, AppState>) -> Result<ServerStatus, String> {
@@ -1315,6 +1354,11 @@ fn get_public_server_status(state: State<'_, AppState>) -> Result<ServerStatus, 
     if let Ok(settings) = state.db.get_settings() {
         status.host = settings.host;
         status.port = settings.port;
+    }
+    // If the in-process server isn't running, check for a CLI-started daemon process
+    if status.state != "running" && daemon_pid_running(&state.database_path) {
+        status.state = "running".into();
+        status.error = None;
     }
     Ok(status)
 }

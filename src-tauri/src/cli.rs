@@ -184,6 +184,18 @@ fn make_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Runtime::new().map_err(|e| format!("failed to start tokio runtime: {e}"))
 }
 
+fn format_bytes(bytes: i64) -> String {
+    const GB: i64 = 1_073_741_824;
+    const MB: i64 = 1_048_576;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.0} MB", bytes as f64 / MB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 // ── public entry points ───────────────────────────────────────────────────────
 
 pub fn run(args: &[String]) -> i32 {
@@ -233,6 +245,7 @@ async fn daemon_main(db_path: PathBuf) -> Result<(), String> {
     server
         .ensure_service(db, runtime, session_store_dir)
         .await?;
+    server.start_api();
 
     // Write our own PID so 'server stop' can find us
     let pid = std::process::id();
@@ -448,10 +461,34 @@ fn dispatch(args: &[String]) -> Result<(), String> {
             let db = open_db(&a)?;
             authenticate(&db, &a)?;
             let models = db.list_models()?;
-            println!("{:<6} {:<40} {:<8} {}", "ID", "Name", "Format", "Status");
-            println!("{}", "─".repeat(62));
-            for m in models {
-                println!("{:<6} {:<40} {:<8} {}", m.id, m.name, m.format, m.status);
+            let detail = a.flags.contains_key("detail");
+            if detail {
+                for m in &models {
+                    println!("─── {} (id={}) ", m.name, m.id);
+                    println!("  Format    : {}", m.format);
+                    println!("  Status    : {}", m.status);
+                    println!("  Size      : {}", format_bytes(m.size_bytes));
+                    println!("  Path      : {}", m.path);
+                    if let Some(ctx) = m.context_length_max {
+                        println!("  Max Ctx   : {ctx}");
+                    }
+                    if let Some(t) = &m.model_type {
+                        println!("  Type      : {t}");
+                    }
+                    if let Some(repo) = &m.hf_repo {
+                        println!("  HF Repo   : {repo}");
+                    }
+                    println!();
+                }
+                if models.is_empty() {
+                    println!("no models imported");
+                }
+            } else {
+                println!("{:<6} {:<40} {:<8} {}", "ID", "Name", "Format", "Status");
+                println!("{}", "─".repeat(62));
+                for m in models {
+                    println!("{:<6} {:<40} {:<8} {}", m.id, m.name, m.format, m.status);
+                }
             }
             Ok(())
         }
@@ -493,33 +530,50 @@ fn dispatch(args: &[String]) -> Result<(), String> {
             let top_k = a.flag_u32("top-k");
             let min_p = a.flag_f32("min-p");
             let repeat_penalty = a.flag_f32("repeat-penalty");
+            let presence_penalty = a.flag_f32("presence-penalty");
             let max_tokens = a.flag_u32("max-tokens");
+            let context_overflow = a.get("context-overflow", "o")
+                .unwrap_or("truncate_middle")
+                .to_string();
+            let stop_strings: Vec<String> = a.get("stop", "S")
+                .map(|v| v.split(',').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect())
+                .unwrap_or_default();
+            let enable_embeddings = a.flags.contains_key("embeddings");
+            let pooling = a.get("pooling", "P").map(str::to_string);
+            let lifetime_secs = a.flag_u32("lifetime").map(|m| m * 60);
 
-            let load_settings = if temperature.is_some()
+            let has_any_setting = temperature.is_some()
                 || top_p.is_some()
                 || top_k.is_some()
                 || min_p.is_some()
                 || repeat_penalty.is_some()
+                || presence_penalty.is_some()
                 || max_tokens.is_some()
-            {
+                || a.flags.contains_key("context-overflow")
+                || !stop_strings.is_empty()
+                || enable_embeddings
+                || pooling.is_some()
+                || lifetime_secs.is_some();
+
+            let load_settings = if has_any_setting {
                 Some(ModelLoadSettings {
                     temperature: temperature.unwrap_or(0.8),
                     limit_response_length: max_tokens.is_some(),
                     max_tokens,
-                    context_overflow: "truncate-left".to_string(),
-                    stop_strings: vec![],
+                    context_overflow,
+                    stop_strings,
                     top_k,
                     repeat_penalty_enabled: repeat_penalty.is_some(),
                     repeat_penalty,
-                    presence_penalty_enabled: false,
-                    presence_penalty: None,
+                    presence_penalty_enabled: presence_penalty.is_some(),
+                    presence_penalty,
                     top_p_enabled: top_p.is_some(),
                     top_p,
                     min_p_enabled: min_p.is_some(),
                     min_p,
-                    enable_embeddings: false,
-                    pooling: None,
-                    lifetime_secs: None,
+                    enable_embeddings,
+                    pooling,
+                    lifetime_secs,
                 })
             } else {
                 None
@@ -611,6 +665,7 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         ("model" | "models", "status") => {
             let db = open_db(&a)?;
             let user = authenticate(&db, &a)?;
+            let detail = a.flags.contains_key("detail");
 
             let settings = db.get_settings()?;
             let port = settings.port;
@@ -634,25 +689,120 @@ fn dispatch(args: &[String]) -> Result<(), String> {
                         serde_json::from_str(&text).map_err(|e| format!("parse error: {e}"))?;
                     let loaded = v["loaded_models"].as_array();
                     let models = loaded.map(|v| v.as_slice()).unwrap_or(&[]);
-                    if models.is_empty() {
+                    let active: Vec<&serde_json::Value> = models
+                        .iter()
+                        .filter(|m| m["loaded"].as_bool().unwrap_or(false))
+                        .collect();
+                    if active.is_empty() {
                         println!("no models loaded");
+                    } else if detail {
+                        for m in &active {
+                            let name = m["model_name"].as_str().unwrap_or("?");
+                            let model_id = m["model_id"].as_i64().unwrap_or(0);
+                            println!("─── {} (id={}) ", name, model_id);
+                            println!(
+                                "  Port        : {}",
+                                m["port"].as_i64().unwrap_or(0)
+                            );
+                            let ctx = m["context_length"]
+                                .as_i64()
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "default".into());
+                            println!("  Context     : {ctx}");
+                            if let Some(t) = m["n_threads"].as_i64() {
+                                println!("  Threads     : {t}");
+                            }
+                            let state = if m["loading"].as_bool().unwrap_or(false) {
+                                "loading"
+                            } else if m["busy"].as_bool().unwrap_or(false) {
+                                "busy"
+                            } else {
+                                "idle"
+                            };
+                            println!("  State       : {state}");
+                            if let Some(mt) = m["model_type"].as_str() {
+                                println!("  Model Type  : {mt}");
+                            }
+                            if let Some(s) = m.get("load_settings") {
+                                if !s.is_null() {
+                                    println!(
+                                        "  Temperature : {}",
+                                        s["temperature"].as_f64().unwrap_or(0.8)
+                                    );
+                                    if s["top_p_enabled"].as_bool().unwrap_or(false) {
+                                        println!(
+                                            "  Top-P       : {}",
+                                            s["top_p"].as_f64().map(|v| v.to_string()).unwrap_or_else(|| "—".into())
+                                        );
+                                    }
+                                    if let Some(tk) = s["top_k"].as_i64() {
+                                        println!("  Top-K       : {tk}");
+                                    }
+                                    if s["min_p_enabled"].as_bool().unwrap_or(false) {
+                                        println!(
+                                            "  Min-P       : {}",
+                                            s["min_p"].as_f64().map(|v| v.to_string()).unwrap_or_else(|| "—".into())
+                                        );
+                                    }
+                                    if s["repeat_penalty_enabled"].as_bool().unwrap_or(false) {
+                                        println!(
+                                            "  Repeat Pen  : {}",
+                                            s["repeat_penalty"].as_f64().map(|v| v.to_string()).unwrap_or_else(|| "—".into())
+                                        );
+                                    }
+                                    if s["presence_penalty_enabled"].as_bool().unwrap_or(false) {
+                                        println!(
+                                            "  Presence Pen: {}",
+                                            s["presence_penalty"].as_f64().map(|v| v.to_string()).unwrap_or_else(|| "—".into())
+                                        );
+                                    }
+                                    if s["limit_response_length"].as_bool().unwrap_or(false) {
+                                        println!(
+                                            "  Max Tokens  : {}",
+                                            s["max_tokens"].as_i64().map(|n| n.to_string()).unwrap_or_else(|| "—".into())
+                                        );
+                                    }
+                                    println!(
+                                        "  Ctx Overflow: {}",
+                                        s["context_overflow"].as_str().unwrap_or("truncate_middle")
+                                    );
+                                    if s["enable_embeddings"].as_bool().unwrap_or(false) {
+                                        println!("  Embeddings  : yes");
+                                        if let Some(p) = s["pooling"].as_str() {
+                                            println!("  Pooling     : {p}");
+                                        }
+                                    }
+                                    if let Some(secs) = s["lifetime_secs"].as_i64() {
+                                        println!("  Lifetime    : {} min", secs / 60);
+                                    }
+                                    if let Some(stops) = s["stop_strings"].as_array() {
+                                        if !stops.is_empty() {
+                                            let list: Vec<&str> = stops
+                                                .iter()
+                                                .filter_map(|v| v.as_str())
+                                                .collect();
+                                            println!("  Stop        : {}", list.join(", "));
+                                        }
+                                    }
+                                }
+                            }
+                            println!();
+                        }
                     } else {
                         println!("{:<6} {:<40} {:<8} {}", "ModelID", "Name", "Port", "Ctx");
                         println!("{}", "─".repeat(62));
-                        for m in models {
-                            if m["loaded"].as_bool().unwrap_or(false) {
-                                let ctx = m["context_length"]
-                                    .as_i64()
-                                    .map(|n| n.to_string())
-                                    .unwrap_or_else(|| "default".into());
-                                println!(
-                                    "{:<6} {:<40} {:<8} {}",
-                                    m["model_id"].as_i64().unwrap_or(0),
-                                    m["model_name"].as_str().unwrap_or("?"),
-                                    m["port"].as_i64().unwrap_or(0),
-                                    ctx,
-                                );
-                            }
+                        for m in &active {
+                            let ctx = m["context_length"]
+                                .as_i64()
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "default".into());
+                            println!(
+                                "{:<6} {:<40} {:<8} {}",
+                                m["model_id"].as_i64().unwrap_or(0),
+                                m["model_name"].as_str().unwrap_or("?"),
+                                m["port"].as_i64().unwrap_or(0),
+                                ctx,
+                            );
                         }
                     }
                     Ok(())
@@ -749,6 +899,7 @@ fn print_help() {
     println!("  user delete --id <id>        Delete a user\n");
     println!("MODEL COMMANDS");
     println!("  model list                   List imported models");
+    println!("    --detail                     Show size, path, max context, type, and HF repo");
     println!("  model import --path <p>      Import a GGUF model file");
     println!("  model delete --id <id>       Remove a model record");
     println!("  model load                   Load a model into the running server");
@@ -756,14 +907,21 @@ fn print_help() {
     println!("    --id   <id>                  Model ID");
     println!("    --ctx <n>                    Context window size (tokens)");
     println!("    --threads <n>                CPU threads to use");
-    println!("    --temperature <f>            Sampling temperature  (e.g. 0.8)");
-    println!("    --top-p <f>                  Top-p nucleus sampling (e.g. 0.95)");
-    println!("    --top-k <n>                  Top-k sampling        (e.g. 40)");
-    println!("    --min-p <f>                  Min-p sampling        (e.g. 0.05)");
-    println!("    --repeat-penalty <f>         Repetition penalty    (e.g. 1.1)");
+    println!("    --temperature <f>            Sampling temperature       (e.g. 0.8)");
+    println!("    --top-p <f>                  Top-p nucleus sampling     (e.g. 0.95)");
+    println!("    --top-k <n>                  Top-k sampling             (e.g. 40)");
+    println!("    --min-p <f>                  Min-p sampling             (e.g. 0.05)");
+    println!("    --repeat-penalty <f>         Repetition penalty         (e.g. 1.1)");
+    println!("    --presence-penalty <f>       Presence penalty           (e.g. 0.0)");
     println!("    --max-tokens <n>             Max response tokens");
+    println!("    --context-overflow <s>       truncate_middle | truncate_start | error");
+    println!("    --stop <s>                   Comma-separated stop strings");
+    println!("    --embeddings                 Enable embeddings mode (/v1/embeddings)");
+    println!("    --pooling <s>                Pooling: none | mean | cls | last | rank");
+    println!("    --lifetime <n>               Auto-eject after <n> minutes of inactivity");
     println!("  model unload [--name <n>]    Unload a named model (omit to unload all)");
-    println!("  model status                 Show currently loaded models\n");
+    println!("  model status                 Show currently loaded models");
+    println!("    --detail                     Show inference settings for each loaded model\n");
     println!("API KEY COMMANDS");
     println!("  key list                     List API keys");
     println!("    --user-id  <id>              Filter by user ID");
