@@ -159,13 +159,13 @@ llmeter model list
 ## Install Issues:
 
 ### Issue 1: 
-“LitAtlas.app” is damaged and can’t be opened. You should eject the disk image.
+“LLMeter.app” is damaged and can’t be opened. You should eject the disk image.
 
 #### Reason: 
 The downloaded unauthorized application will be quarantined by default.
 #### Solution:  
 ```bash
 # replace /Applications/YourAppName.app with actual APP path 
-# (default will be /Applications/LitAtlas.app)
+# (default will be /Applications/LLMeter.app)
 xattr -cr /Applications/YourAppName.app
 ```
