@@ -664,7 +664,16 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         ("key" | "keys", "list") => {
             let db = open_db(&a)?;
             authenticate(&db, &a)?;
-            let user_id = a.get("user-id", "i").and_then(|v| v.parse::<i64>().ok());
+            let user_id = if let Some(name) = a.get("username", "U") {
+                let users = db.list_users()?;
+                let found = users
+                    .into_iter()
+                    .find(|u| u.username.eq_ignore_ascii_case(name))
+                    .ok_or_else(|| format!("no user found with username '{name}'"))?;
+                Some(found.id)
+            } else {
+                a.get("user-id", "i").and_then(|v| v.parse::<i64>().ok())
+            };
             let keys = db.list_api_keys(user_id)?;
             println!(
                 "{:<6} {:<14} {:<25} {:<20} {}",
@@ -756,7 +765,9 @@ fn print_help() {
     println!("  model unload [--name <n>]    Unload a named model (omit to unload all)");
     println!("  model status                 Show currently loaded models\n");
     println!("API KEY COMMANDS");
-    println!("  key list [--user-id <id>]    List API keys");
+    println!("  key list                     List API keys");
+    println!("    --user-id  <id>              Filter by user ID");
+    println!("    --username <u>               Filter by username (case-insensitive)");
     println!("  key create                   Create an API key");
     println!("    --user-id <id>               Target user id (required)");
     println!("    --label   <l>                Key label     (required)");

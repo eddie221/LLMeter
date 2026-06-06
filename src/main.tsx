@@ -27,6 +27,7 @@ import { DashboardPage } from './pages/Dashboard';
 import { LogsPage } from './pages/Logs';
 import { ModelsPage } from './pages/Models';
 import { AdminPage } from './pages/Admin';
+import { CliPage } from './pages/Cli';
 import { ProfilePage } from './pages/Profile';
 import { ApplicationSettingsPage } from './pages/Settings';
 
@@ -36,6 +37,7 @@ const navPageIcons: Record<Page, string> = {
   models: 'bi-cpu',
   logs: 'bi-terminal',
   admin: 'bi-people',
+  cli: 'bi-book',
   profile: 'bi-person-circle',
   settings: 'bi-gear',
 };
@@ -77,7 +79,7 @@ function App() {
 }
 
 function Shell({ currentUser, page, setPage, onLogout, onUpdateUser }: { currentUser: UserAccount; page: Page; setPage: (page: Page) => void; onLogout: () => void; onUpdateUser: (u: UserAccount) => void }) {
-  const mainNavPages: Page[] = ['dashboard', 'models', 'chat', 'logs', ...(currentUser.role === 'admin' ? ['admin' as Page] : [])];
+  const mainNavPages: Page[] = ['dashboard', 'models', 'chat', 'logs', ...(currentUser.role === 'admin' ? ['admin' as Page, 'cli' as Page] : [])];
   const [collapsed, setCollapsed] = useState(false);
   const [chatModel, setChatModel] = useState<string | undefined>(undefined);
   const serverStatus = useAsyncData<ServerStatus>(
@@ -142,13 +144,13 @@ function Shell({ currentUser, page, setPage, onLogout, onUpdateUser }: { current
           <ModelsPage currentUser={currentUser} serverStatus={serverStatus.data} setServerStatus={serverStatus.setData} reloadServerStatus={serverStatus.reload} setPage={setPage} onOpenInChat={(name) => { setChatModel(name); setPage('chat'); }} />
         </div>
         {/* Logs/Admin fill full height with internal scroll */}
-        {(page === 'logs' || page === 'admin') && (
+        {(page === 'logs' || page === 'admin' || page === 'cli') && (
           <div className="scrollPageWrapper">
             <PageView page={page} currentUser={currentUser} setPage={setPage} onUpdateUser={onUpdateUser} serverStatus={serverStatus.data} setServerStatus={serverStatus.setData} reloadServerStatus={serverStatus.reload} />
           </div>
         )}
         {/* Dashboard/Profile/Settings use padded container */}
-        {page !== 'chat' && page !== 'models' && page !== 'logs' && page !== 'admin' && (
+        {page !== 'chat' && page !== 'models' && page !== 'logs' && page !== 'admin' && page !== 'cli' && (
           <Container fluid className="contentShell">
             <PageView page={page} currentUser={currentUser} setPage={setPage} onUpdateUser={onUpdateUser} serverStatus={serverStatus.data} setServerStatus={serverStatus.setData} reloadServerStatus={serverStatus.reload} />
           </Container>
@@ -161,6 +163,7 @@ function Shell({ currentUser, page, setPage, onLogout, onUpdateUser }: { current
 function PageView({ page, currentUser, setPage, onUpdateUser, serverStatus, setServerStatus, reloadServerStatus }: { page: Page; currentUser: UserAccount; setPage: (p: Page) => void; onUpdateUser: (u: UserAccount) => void; serverStatus: ServerStatus | null; setServerStatus: React.Dispatch<React.SetStateAction<ServerStatus | null>>; reloadServerStatus: () => Promise<void> }) {
   if (page === 'logs') return <LogsPage currentUser={currentUser} />;
   if (page === 'admin') return currentUser.role === 'admin' ? <AdminPage currentUser={currentUser} /> : <ErrorCard message="Admin access required." />;
+  if (page === 'cli') return <CliPage />;
   if (page === 'profile') return <ProfilePage currentUser={currentUser} onUpdateUser={onUpdateUser} />;
   if (page === 'settings') return currentUser.role === 'admin' ? <ApplicationSettingsPage currentUser={currentUser} /> : <ErrorCard message="Admin access required." />;
   return <DashboardPage currentUser={currentUser} />;

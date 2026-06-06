@@ -1,4 +1,4 @@
-export type Page = 'dashboard' | 'chat' | 'models' | 'logs' | 'admin' | 'profile' | 'settings';
+export type Page = 'dashboard' | 'chat' | 'models' | 'logs' | 'admin' | 'profile' | 'settings' | 'cli';
 export type UserAccount = { id: number; uid: string; username: string; display_name: string; role: 'admin' | 'user'; enabled: boolean; created_at: number };
 export type LoginResult = { user: UserAccount; api_key: string | null };
 export type ApiKeyRecord = { id: number; user_id: number; username: string | null; display_name: string | null; label: string; key_prefix: string; enabled: boolean; created_at: number };

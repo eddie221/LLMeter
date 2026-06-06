@@ -6,6 +6,7 @@ export const pageLabels: Array<[Page, string]> = [
   ['models', 'Server'],
   ['logs', 'Logs'],
   ['admin', 'Admin'],
+  ['cli', 'CLI'],
   ['profile', 'Profile'],
   ['settings', 'Settings'],
 ];
