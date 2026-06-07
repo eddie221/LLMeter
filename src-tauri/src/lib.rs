@@ -1783,6 +1783,47 @@ pub fn run() {
             cancel_download,
             get_cli_binary_path
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running LLMeter");
+        .on_window_event(|window, event| {
+            // macOS convention: closing the window hides it rather than
+            // destroying it, so the app stays alive in the Dock and can be
+            // reopened by clicking the icon.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error building LLMeter")
+        .run(|app_handle, event| {
+            match event {
+                // Dock icon clicked while app is running — show the window.
+                tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                    if !has_visible_windows {
+                        if let Some(win) = app_handle.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                }
+                // Cmd+Q (or programmatic exit) — kill child processes first.
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    static CLEANING_UP: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if CLEANING_UP.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    }
+                    api.prevent_exit();
+                    let app_handle = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(state) = app_handle.try_state::<AppState>() {
+                            let _ = state.runtime.eject_model(None).await;
+                            let pid_path = server_pid_path(&state.database_path);
+                            let _ = std::fs::remove_file(&pid_path);
+                        }
+                        app_handle.exit(0);
+                    });
+                }
+                _ => {}
+            }
+        });
 }
