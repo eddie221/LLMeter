@@ -173,6 +173,10 @@ impl ServerManager {
             .route("/v1/chat/completions", post(chat_completions))
             .route("/v1/embeddings", post(embeddings))
             .route("/api/v1/chat", post(simple_chat))
+            .layer(axum::middleware::from_fn_with_state(
+                self.clone(),
+                web_running_guard,
+            ))
             .layer(CorsLayer::permissive())
             .with_state(ApiState {
                 db: db.clone(),
@@ -206,6 +210,9 @@ impl ServerManager {
 
     pub fn stop(&self) -> ServerStatus {
         let mut inner = self.inner.lock().expect("server mutex poisoned");
+        if let Some(tx) = inner.shutdown.take() {
+            let _ = tx.send(());
+        }
         inner.status.state = "stopped".into();
         inner.status.error = None;
         inner.status.clone()
@@ -1274,6 +1281,20 @@ struct AnthropicMessagesRequest {
 #[derive(Debug, Deserialize)]
 struct EmbeddingsRequest {
     model: String,
+    #[serde(default)]
+    input: serde_json::Value,
+}
+
+fn embeddings_input_text(input: &serde_json::Value) -> String {
+    match input {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
 }
 
 async fn embeddings(
@@ -1289,8 +1310,11 @@ async fn embeddings(
         Err(resp) => return resp,
     };
 
-    let model = match serde_json::from_slice::<EmbeddingsRequest>(&body) {
-        Ok(req) => req.model,
+    let (model, input_text) = match serde_json::from_slice::<EmbeddingsRequest>(&body) {
+        Ok(req) => {
+            let text = embeddings_input_text(&req.input);
+            (req.model, text)
+        }
         Err(err) => {
             let message = format!("Invalid embeddings request: {err}");
             let _ = state.db.add_log(&RequestLogRecord {
@@ -1412,9 +1436,16 @@ async fn embeddings(
     }
 
     state.runtime.decrement_active(&model).await;
+    // Prefer llama-server's usage.prompt_tokens; fall back to estimate.
+    let input_tokens = serde_json::from_str::<serde_json::Value>(&resp_body)
+        .ok()
+        .and_then(|v| v["usage"]["prompt_tokens"].as_i64())
+        .unwrap_or_else(|| token_estimate(&input_text));
     state
         .runtime
-        .push_log(format!("< 200 OK  /v1/embeddings  model=\"{model}\""))
+        .push_log(format!(
+            "< 200 OK  /v1/embeddings  model=\"{model}\"  in={input_tokens}"
+        ))
         .await;
     let _ = state.db.add_log(&RequestLogRecord {
         id: 0,
@@ -1424,9 +1455,9 @@ async fn embeddings(
         api_key_prefix: auth.api_key_prefix,
         endpoint: "/v1/embeddings".into(),
         model: Some(model),
-        input_text: String::new(),
+        input_text,
         output_text: String::new(),
-        input_tokens: 0,
+        input_tokens,
         output_tokens: 0,
         status_code: 200,
         error_message: None,
@@ -1917,6 +1948,25 @@ fn api_auth(db: &Db, headers: &HeaderMap) -> Result<AuthContext, Response> {
         )),
         Err(err) => Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, &err)),
     }
+}
+
+/// Blocks `/web/*` routes when the server is not in "running" state, mirroring
+/// the gating applied to `/v1/*` endpoints. Static dashboard assets under
+/// `/web/assets/` are exempt so the page can still render an error.
+async fn web_running_guard(
+    State(server): State<ServerManager>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = req.uri().path();
+    let guarded = path.starts_with("/web/") && !path.starts_with("/web/assets/");
+    if guarded && server.status().state != "running" {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "LLMeter API server is stopped. Start it from the desktop app or run `llmeter server start`.",
+        );
+    }
+    next.run(req).await
 }
 
 fn require_api_server_running(server: &ServerManager) -> Result<(), Response> {

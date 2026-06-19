@@ -43,3 +43,6 @@ graphify-out/
 # Vite / TypeScript cache
 .vite/
 *.tsbuildinfo
+LLMeter.canvas
+.gitignore
+MANUAL.md

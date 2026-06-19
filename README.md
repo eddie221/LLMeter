@@ -1,4 +1,4 @@
-# LLMeter
+# LLMeter -- Local Large Model Meter
 
 A desktop application for running and managing local large language models (LLMs). LLMeter bundles a full HTTP inference server, a multi-user access control system, and a chat interface into a single native app — no cloud required.
 
