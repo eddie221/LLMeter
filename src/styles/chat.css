@@ -754,10 +754,22 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--muted);
-  display: flex;
+  display: inline-flex;
   font-size: 12px;
   gap: 6px;
+  max-width: 220px;
   padding: 6px 10px;
+}
+
+.appChatFileThumb .appChatFileName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.appChatFileThumb i {
+  color: #9fb0ca;
+  font-size: 14px;
 }
 
 /* ── Composer ── */

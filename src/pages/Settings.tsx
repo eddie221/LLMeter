@@ -83,6 +83,22 @@ export function SettingsPanel({ currentUser, onSaved }: { currentUser: UserAccou
             <Text className="settingsSectionLabel">Access</Text>
             <Switch color="green" label="Require API key for /v1/ endpoints" description={settings.require_api_key ? 'Clients must send a valid Bearer token. Disable for open access.' : 'Open access - no API key required. Enable to restrict access.'} checked={settings.require_api_key} onChange={(e) => updateSettings({ ...settings, require_api_key: e.currentTarget.checked })} />
           </Card>
+
+          <Card withBorder className="settingsSection">
+            <Text className="settingsSectionLabel">Runtime</Text>
+            <TextInput
+              label="llama-server path"
+              placeholder="Leave blank to use bundled or system llama-server"
+              value={settings.llama_cpp_path ?? ''}
+              onChange={(e) => updateSettings({ ...settings, llama_cpp_path: e.currentTarget.value.trim() || null })}
+            />
+            <TextInput
+              label="HF→GGUF convert script path"
+              placeholder="Optional — path to llama.cpp's convert_hf_to_gguf.py"
+              value={settings.hf_convert_script_path ?? ''}
+              onChange={(e) => updateSettings({ ...settings, hf_convert_script_path: e.currentTarget.value.trim() || null })}
+            />
+          </Card>
           <Group justify="space-between" className="settingsActions">
             <Button variant="light" onClick={reload}>Refresh</Button>
             <Button onClick={save}>Save settings</Button>

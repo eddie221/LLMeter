@@ -152,11 +152,19 @@ export function mergeChatContent(left: string | ChatContentPart[], right: string
   return [...leftParts, ...rightParts];
 }
 
+function isChatContentEmpty(content: string | ChatContentPart[]): boolean {
+  if (typeof content === 'string') return content.trim() === '';
+  return content.every(part =>
+    part.type === 'text' ? part.text.trim() === '' : !part.image_url.url.trim(),
+  );
+}
+
 export function normalizeChatRequestMessages(messages: ChatRequestMessage[]): ChatRequestMessage[] {
   const normalized: ChatRequestMessage[] = [];
   for (const message of messages) {
     if (message.role !== 'user' && message.role !== 'assistant') continue;
     if (message.role === 'assistant' && normalized.length === 0) continue;
+    if (isChatContentEmpty(message.content)) continue;
     const previous = normalized[normalized.length - 1];
     if (previous?.role === message.role) {
       previous.content = mergeChatContent(previous.content, message.content);
@@ -169,6 +177,49 @@ export function normalizeChatRequestMessages(messages: ChatRequestMessage[]): Ch
 
 export function displayChatContent(content: string) {
   return content.replace(/data:[^\s;]+\/[^\s;]+;base64,[A-Za-z0-9+/=]+/g, '[base64 attachment data hidden in chat view]');
+}
+
+export type ExtractedAttachmentRef = { name: string; kind: string; size: number; mime: string };
+
+export function extractEmbeddedAttachments(content: string): { text: string; refs: ExtractedAttachmentRef[] } {
+  const marker = 'Attached files for this message:';
+  const markerIdx = content.indexOf(marker);
+  if (markerIdx < 0) return { text: content, refs: [] };
+  const before = content.slice(0, markerIdx).replace(/\n+$/, '');
+  const after = content.slice(markerIdx + marker.length);
+  const refs: ExtractedAttachmentRef[] = [];
+  const headerRe = /\[Attachment \d+: ([^\]]+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = headerRe.exec(after)) !== null) {
+    const name = match[1];
+    const tail = after.slice(match.index + match[0].length, match.index + match[0].length + 200);
+    const typeMatch = /Type:\s*([^\n]+)/.exec(tail);
+    const sizeMatch = /Size:\s*([0-9.]+)\s*(B|KB|MB|GB)/i.exec(tail);
+    const kindMatch = /Kind:\s*([a-z]+)/i.exec(tail);
+    let size = 0;
+    if (sizeMatch) {
+      const n = parseFloat(sizeMatch[1]);
+      const unit = sizeMatch[2].toUpperCase();
+      size = n * (unit === 'GB' ? 1e9 : unit === 'MB' ? 1e6 : unit === 'KB' ? 1024 : 1);
+    }
+    refs.push({ name, kind: kindMatch?.[1] ?? 'binary', size, mime: typeMatch?.[1]?.trim() ?? '' });
+  }
+  return { text: before, refs };
+}
+
+export function attachmentIconClass(file: { name?: string; mime?: string; kind?: string }): string {
+  const name = (file.name ?? '').toLowerCase();
+  const mime = (file.mime ?? '').toLowerCase();
+  if (file.kind === 'text' || mime.startsWith('text/')) {
+    if (/\.(md|markdown)$/.test(name)) return 'markdown';
+    if (/\.(json|ya?ml|toml|xml|csv|tsv|rs|ts|tsx|js|jsx|py|html|css|sql|sh|zsh|go|java|c|cpp|h)$/.test(name)) return 'file-earmark-code';
+    return 'file-earmark-text';
+  }
+  if (mime.startsWith('audio/')) return 'file-earmark-music';
+  if (mime.startsWith('video/')) return 'file-earmark-play';
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'file-earmark-pdf';
+  if (/\.(zip|tar|gz|bz2|7z|rar)$/.test(name)) return 'file-earmark-zip';
+  return 'file-earmark';
 }
 
 export function ChatPage({ currentUser, requestedModel }: { currentUser: UserAccount; requestedModel?: string }) {
@@ -601,6 +652,43 @@ export function ChatPage({ currentUser, requestedModel }: { currentUser: UserAcc
   }, [loadedStatus.reload]);
 
   useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (loading) return;
+      try {
+        const remote = await invoke<ChatSession[]>('list_chat_sessions', { userId: currentUser.id, groupId: activeGroupId });
+        if (cancelled) return;
+        setSessions(prev => {
+          const remoteById = new Map(remote.map(s => [s.id, s]));
+          const next: ChatSession[] = [];
+          let changed = remote.length !== prev.length;
+          for (const localSession of prev) {
+            const remoteSession = remoteById.get(localSession.id);
+            if (!remoteSession) { changed = true; continue; }
+            remoteById.delete(localSession.id);
+            if (remoteSession.updatedAt > localSession.updatedAt) {
+              next.push(remoteSession);
+              changed = true;
+            } else {
+              next.push(localSession);
+            }
+          }
+          for (const remoteSession of remoteById.values()) {
+            next.push(remoteSession);
+            changed = true;
+          }
+          return changed ? next : prev;
+        });
+        setSidebarSessionsByGroup(prev => ({ ...prev, [activeGroupId]: remote }));
+      } catch {
+        // ignore transient refresh errors
+      }
+    };
+    const timer = window.setInterval(() => void tick(), 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [currentUser.id, activeGroupId, loading]);
+
+  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -822,23 +910,35 @@ export function ChatPage({ currentUser, requestedModel }: { currentUser: UserAcc
               </div>
             : <div className="appChatMsgList">
                 {messages.map((msg, i) => (
-                  msg.role === 'user' ? (
-                    <div key={i} className="appChatMsgRow user">
-                      <div className="appChatMsgTime">{formatChatTime(msg.timestamp)}</div>
-                      <div className="appChatUserBubble">
-                        {msg.attachments && msg.attachments.length > 0 && (
-                          <div className="appChatMsgAttachments">
-                            {msg.attachments.map((att, j) => (
-                              att.kind === 'image'
-                                ? <img key={j} src={att.content} alt={att.name} className="appChatThumb" title={att.name} />
-                                : <div key={j} className="appChatFileThumb">📄 {att.name} · {formatBytes(att.size)}</div>
-                            ))}
-                          </div>
-                        )}
-                        {msg.content ? <span>{displayChatContent(msg.content)}</span> : null}
+                  msg.role === 'user' ? (() => {
+                    const hasAttachments = msg.attachments && msg.attachments.length > 0;
+                    const extracted = hasAttachments ? { text: msg.content, refs: [] as ExtractedAttachmentRef[] } : extractEmbeddedAttachments(msg.content);
+                    const displayText = extracted.text;
+                    return (
+                      <div key={i} className="appChatMsgRow user">
+                        <div className="appChatMsgTime">{formatChatTime(msg.timestamp)}</div>
+                        <div className="appChatUserBubble">
+                          {hasAttachments && (
+                            <div className="appChatMsgAttachments">
+                              {msg.attachments!.map((att, j) => (
+                                att.kind === 'image'
+                                  ? <img key={j} src={att.content} alt={att.name} className="appChatThumb" title={att.name} />
+                                  : <div key={j} className="appChatFileThumb" title={`${att.name} · ${formatBytes(att.size)}`}><Bi name={attachmentIconClass(att)} /><span className="appChatFileName">{att.name}</span></div>
+                              ))}
+                            </div>
+                          )}
+                          {!hasAttachments && extracted.refs.length > 0 && (
+                            <div className="appChatMsgAttachments">
+                              {extracted.refs.map((ref, j) => (
+                                <div key={j} className="appChatFileThumb" title={`${ref.name}${ref.size ? ' · ' + formatBytes(ref.size) : ''}`}><Bi name={attachmentIconClass(ref)} /><span className="appChatFileName">{ref.name}</span></div>
+                              ))}
+                            </div>
+                          )}
+                          {displayText ? <span>{displayChatContent(displayText)}</span> : null}
+                        </div>
                       </div>
-                    </div>
-                  ) : (
+                    );
+                  })() : (
                     <div key={i} className="appChatMsgRow assistant">
                       <div className="appChatAsstModelLabel">{msg.meta?.model ?? model}</div>
                       <div className="appChatAsstContent">

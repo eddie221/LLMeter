@@ -105,7 +105,7 @@ chatPanel.addEventListener('drop', event => {
 });
 document.querySelector('#chatInput').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChatMessage(); } });
 document.querySelector('#chatSystemPrompt').addEventListener('change', saveActiveChatSession);
-document.querySelector('#chatModel').addEventListener('change', saveActiveChatSession);
+document.querySelector('#chatModel').addEventListener('change', () => { saveActiveChatSession(); renderChatComposerCapabilities(); });
 document.querySelector('#closeLogModal').addEventListener('click', closeLogModal);
 document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tab)));
 document.querySelectorAll('[data-scope]').forEach(button => button.addEventListener('click', () => setScope(button.dataset.scope)));
@@ -560,7 +560,20 @@ function renderActiveChatSession() {
   document.querySelector('#deleteChatSession').disabled = !session;
   document.querySelector('#renameChatSession').disabled = !session;
   document.querySelector('#sendChat').disabled = !session || chatState.sending || !document.querySelector('#chatModel').value;
+  renderChatComposerCapabilities();
   renderChatMessages(session?.messages || []);
+}
+
+function renderChatComposerCapabilities() {
+  const root = document.querySelector('#chatComposerCapabilities');
+  if (!root) return;
+  const modelName = document.querySelector('#chatModel')?.value || '';
+  const status = chatState.loadedModels.find(item => item.model_name === modelName);
+  const caps = status ? loadedModelCapabilities(status) : [];
+  const parts = [];
+  if (caps.includes('reasoning')) parts.push('<span class="chatComposerCapBadge capReason" title="Reasoning supported"><i class="bi bi-lightbulb"></i> Think</span>');
+  if (caps.includes('vision')) parts.push('<span class="chatComposerCapBadge capVision" title="Vision supported"><i class="bi bi-eye"></i> Vision</span>');
+  root.innerHTML = parts.join('');
 }
 
 function renderChatMessages(messages, isGenerating = false) {
@@ -573,17 +586,31 @@ function renderChatMessages(messages, isGenerating = false) {
     const isUser = message.role === 'user';
     const time = escapeHtml(formatChatTime(message.timestamp));
     if (isUser) {
-      // Use _display hint when available: show only the typed text + image thumbnails
-      if (message._display) {
-        const text = message._display.text ? `<span>${escapeHtml(message._display.text)}</span>` : '';
-        const thumbs = (message._display.images || []).map(img =>
+      if (message.attachments?.length || message._display) {
+        const typed = message._display?.text ?? (typeof message.content === 'string' ? message.content : '');
+        const text = typed ? `<span>${escapeHtml(typed)}</span>` : '';
+        const images = message.attachments?.filter(a => a.kind === 'image').map(a => ({ name: a.name, url: a.content }))
+          ?? message._display?.images ?? [];
+        const files = message.attachments?.filter(a => a.kind !== 'image').map(a => ({ name: a.name, size: a.size, kind: a.kind, mime: a.mime }))
+          ?? message._display?.files ?? [];
+        const thumbs = images.map(img =>
           `<img class="chatMsgThumb" src="${img.url}" alt="${escapeHtml(img.name)}" title="${escapeHtml(img.name)}" />`
         ).join('');
         const thumbsHtml = thumbs ? `<div class="chatMsgThumbs">${thumbs}</div>` : '';
-        return `<div class="appChatMsgRow user"><div class="appChatMsgTime">${time}</div><div class="appChatUserBubble">${text}${thumbsHtml}</div></div>`;
+        const fileChips = files.map(file =>
+          `<span class="chatMsgFileChip" title="${escapeHtml(file.name)}${file.size ? ' · ' + escapeHtml(formatBytes(file.size)) : ''}"><i class="bi ${fileIconClass(file)}"></i><span class="chatMsgFileName">${escapeHtml(file.name)}</span></span>`
+        ).join('');
+        const filesHtml = fileChips ? `<div class="chatMsgFiles">${fileChips}</div>` : '';
+        return `<div class="appChatMsgRow user"><div class="appChatMsgTime">${time}</div><div class="appChatUserBubble">${text}${thumbsHtml}${filesHtml}</div></div>`;
       }
-      const content = escapeHtml(displayChatContent(typeof message.content === 'string' ? message.content : JSON.stringify(message.content)));
-      return `<div class="appChatMsgRow user"><div class="appChatMsgTime">${time}</div><div class="appChatUserBubble">${content}</div></div>`;
+      const rawContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+      const extracted = extractEmbeddedAttachments(rawContent);
+      const text = extracted.text ? `<span>${escapeHtml(displayChatContent(extracted.text))}</span>` : '';
+      const fileChips = extracted.refs.map(file =>
+        `<span class="chatMsgFileChip" title="${escapeHtml(file.name)}${file.size ? ' · ' + escapeHtml(formatBytes(file.size)) : ''}"><i class="bi ${fileIconClass(file)}"></i><span class="chatMsgFileName">${escapeHtml(file.name)}</span></span>`
+      ).join('');
+      const filesHtml = fileChips ? `<div class="chatMsgFiles">${fileChips}</div>` : '';
+      return `<div class="appChatMsgRow user"><div class="appChatMsgTime">${time}</div><div class="appChatUserBubble">${text}${filesHtml}</div></div>`;
     } else {
       const content = escapeHtml(displayChatContent(typeof message.content === 'string' ? message.content : JSON.stringify(message.content)));
       return `<div class="appChatMsgRow assistant"><div class="appChatAsstModelLabel">${escapeHtml(message.model || 'assistant')}</div><div class="appChatAsstContent">${content}</div><div class="appChatMsgTime" style="margin-top:4px">${time}</div></div>`;
@@ -732,17 +759,12 @@ async function sendChatMessage() {
   session.model = model;
   session.systemPrompt = document.querySelector('#chatSystemPrompt').value;
   const attachmentsAtSend = [...chatState.pendingAttachments];
-  const attachmentText = attachmentContext(attachmentsAtSend);
-  const userContent = [input, attachmentText].filter(Boolean).join('\n\n');
   session.messages.push({
     role: 'user',
-    content: userContent,
-    _display: {
-      text: input,
-      images: attachmentsAtSend
-        .filter(a => a.kind === 'image')
-        .map(a => ({ name: a.name, url: a.content })),
-    },
+    content: input,
+    attachments: attachmentsAtSend.length
+      ? attachmentsAtSend.map(({ name, mime, size, kind, content }) => ({ name, mime, size, kind, content }))
+      : undefined,
     timestamp: Date.now(),
   });
   session.updatedAt = Date.now();
@@ -753,7 +775,12 @@ async function sendChatMessage() {
   renderChatMessages(session.messages, true);
   try {
     const requestMessages = normalizeChatRequestMessages([
-      ...session.messages.slice(0, -1).map(message => ({ role: message.role, content: message.content })),
+      ...session.messages.slice(0, -1).map(message => ({
+        role: message.role,
+        content: message.attachments?.length
+          ? [message.content, attachmentContext(message.attachments)].filter(Boolean).join('\n\n')
+          : message.content,
+      })),
       { role: 'user', content: chatPromptContent(input, attachmentsAtSend) },
     ]);
     const fullMessages = session.systemPrompt.trim()
@@ -862,11 +889,22 @@ function mergeChatContent(left, right) {
   return [...leftParts, ...rightParts];
 }
 
+function isChatContentEmpty(content) {
+  if (typeof content === 'string') return content.trim() === '';
+  if (!Array.isArray(content)) return true;
+  return content.every(part =>
+    part?.type === 'text'
+      ? String(part.text || '').trim() === ''
+      : !String(part?.image_url?.url || '').trim(),
+  );
+}
+
 function normalizeChatRequestMessages(messages) {
   const normalized = [];
   for (const message of messages) {
     if (message.role !== 'user' && message.role !== 'assistant') continue;
     if (message.role === 'assistant' && normalized.length === 0) continue;
+    if (isChatContentEmpty(message.content)) continue;
     const previous = normalized[normalized.length - 1];
     if (previous?.role === message.role) {
       previous.content = mergeChatContent(previous.content, message.content);
@@ -875,6 +913,48 @@ function normalizeChatRequestMessages(messages) {
     }
   }
   return normalized;
+}
+
+function extractEmbeddedAttachments(content) {
+  const marker = 'Attached files for this message:';
+  const idx = String(content || '').indexOf(marker);
+  if (idx < 0) return { text: String(content || ''), refs: [] };
+  const before = content.slice(0, idx).replace(/\n+$/, '');
+  const after = content.slice(idx + marker.length);
+  const refs = [];
+  const re = /\[Attachment \d+: ([^\]]+)\]/g;
+  let m;
+  while ((m = re.exec(after)) !== null) {
+    const name = m[1];
+    const tail = after.slice(m.index + m[0].length, m.index + m[0].length + 200);
+    const typeMatch = /Type:\s*([^\n]+)/.exec(tail);
+    const sizeMatch = /Size:\s*([0-9.]+)\s*(B|KB|MB|GB)/i.exec(tail);
+    const kindMatch = /Kind:\s*([a-z]+)/i.exec(tail);
+    let size = 0;
+    if (sizeMatch) {
+      const n = parseFloat(sizeMatch[1]);
+      const unit = sizeMatch[2].toUpperCase();
+      size = n * (unit === 'GB' ? 1e9 : unit === 'MB' ? 1e6 : unit === 'KB' ? 1024 : 1);
+    }
+    refs.push({ name, kind: kindMatch?.[1] || 'binary', size, mime: typeMatch?.[1]?.trim() || '' });
+  }
+  return { text: before, refs };
+}
+
+function fileIconClass(file) {
+  const name = (file?.name || '').toLowerCase();
+  const mime = (file?.mime || '').toLowerCase();
+  if (file?.kind === 'text' || mime.startsWith('text/')) {
+    if (/\.(md|markdown)$/.test(name)) return 'bi-markdown';
+    if (/\.(json|ya?ml|toml|xml|csv|tsv)$/.test(name)) return 'bi-file-earmark-code';
+    if (/\.(rs|ts|tsx|js|jsx|py|html|css|sql|sh|zsh|go|java|c|cpp|h)$/.test(name)) return 'bi-file-earmark-code';
+    return 'bi-file-earmark-text';
+  }
+  if (mime.startsWith('audio/')) return 'bi-file-earmark-music';
+  if (mime.startsWith('video/')) return 'bi-file-earmark-play';
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'bi-file-earmark-pdf';
+  if (/\.(zip|tar|gz|bz2|7z|rar)$/.test(name)) return 'bi-file-earmark-zip';
+  return 'bi-file-earmark';
 }
 
 function displayChatContent(content) {
@@ -893,6 +973,25 @@ function serverSetting(label, value) {
   return `<div class="serverSetting"><span>${escapeHtml(label)}</span><strong>${escapeHtml(settingValue(value))}</strong></div>`;
 }
 
+const VISION_PIPELINE_TAGS = new Set(['image-text-to-text', 'visual-question-answering', 'image-to-text']);
+
+function loadedModelCapabilities(item) {
+  const caps = [];
+  const modelType = (item.model_type || '').toLowerCase();
+  if (item.mmproj_path || VISION_PIPELINE_TAGS.has(modelType)) caps.push('vision');
+  if (modelType.includes('reasoning')) caps.push('reasoning');
+  return caps;
+}
+
+function renderCapabilityIcons(caps) {
+  if (!caps.length) return '';
+  const parts = [];
+  if (caps.includes('vision')) parts.push('<span class="hfCapIcon hfCapVision" title="Vision">◉</span>');
+  if (caps.includes('tool-use')) parts.push('<span class="hfCapIcon hfCapTool" title="Tool Use">⚙</span>');
+  if (caps.includes('reasoning')) parts.push('<span class="hfCapIcon hfCapReason" title="Reasoning">ℹ</span>');
+  return `<div class="hfModelCapIcons">${parts.join('')}</div>`;
+}
+
 function renderServerModels(items) {
   const root = document.querySelector('#serverModels');
   const loaded = items.filter(item => item.loaded);
@@ -903,10 +1002,11 @@ function renderServerModels(items) {
   }
   root.innerHTML = loaded.map(item => {
     const settings = item.load_settings || {};
+    const caps = loadedModelCapabilities(item);
     return `<div class="serverModelCard">
       <div class="serverModelHeader">
         <div class="serverModelName">${escapeHtml(item.model_name || 'unknown')}</div>
-        <div class="topbar"><span class="roleBadge user">Loaded</span></div>
+        <div class="topbar">${renderCapabilityIcons(caps)}<span class="roleBadge user">Loaded</span></div>
       </div>
       <div class="serverSettingGrid">
         ${serverSetting('Context length', item.context_length)}
